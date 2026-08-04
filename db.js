@@ -81,4 +81,4 @@ export function findWordMatch(text, direction) {
     }
   }
   return null;
-      }
+     }
