@@ -233,6 +233,70 @@ export async function findWordMatch(text, sourceLang, targetLang) {
   return null;
 }
 
+// ─────────── FULL-TEXT TRANSLATION MEMORY ───────────
+// Stores sentences, paragraphs and page-sized translations separately from
+// the word dictionary. This lets BembaHub reuse long translations without
+// spending another Gemini request.
+
+function normalizeMemoryText(text) {
+  return (text || "").replace(/\\s+/g, " ").trim().toLowerCase();
+}
+
+export async function findTranslationMemory(text, sourceLang, targetLang) {
+  const clean = (text || "").trim();
+  const key = normalizeMemoryText(clean);
+  if (!clean || !key || !isValidLang(sourceLang) || !isValidLang(targetLang)) return null;
+
+  const { rows } = await pool.query(
+    `SELECT * FROM translation_memory
+     WHERE source_lang=$1 AND target_lang=$2 AND source_text_key=$3
+     LIMIT 1`,
+    [sourceLang, targetLang, key]
+  );
+  if (!rows[0]) return null;
+
+  const { rows: updated } = await pool.query(
+    `UPDATE translation_memory
+     SET usage_count=usage_count+1, last_used_at=now(), updated_at=now()
+     WHERE id=$1
+     RETURNING *`,
+    [rows[0].id]
+  );
+  const row = updated[0] || rows[0];
+
+  return {
+    translation: row.target_text,
+    source: "memory",
+    label: "Saved translation — BembaHub translation memory",
+    memoryId: row.id,
+    usageCount: row.usage_count,
+  };
+}
+
+export async function recordTranslationMemory({
+  sourceText, targetText, sourceLang, targetLang, source, userId
+}) {
+  const cleanSource = (sourceText || "").trim();
+  const cleanTarget = (targetText || "").trim();
+  const key = normalizeMemoryText(cleanSource);
+  if (!cleanSource || !cleanTarget || !key) return null;
+  if (!isValidLang(sourceLang) || !isValidLang(targetLang)) return null;
+
+  const { rows } = await pool.query(
+    `INSERT INTO translation_memory
+      (source_lang,target_lang,source_text,source_text_key,target_text,source,usage_count,created_by,created_at,updated_at,last_used_at)
+     VALUES ($1,$2,$3,$4,$5,$6,1,$7,now(),now(),now())
+     ON CONFLICT (source_lang,target_lang,source_text_key)
+     DO UPDATE SET
+       usage_count=translation_memory.usage_count+1,
+       last_used_at=now(),
+       updated_at=now()
+     RETURNING *`,
+    [sourceLang,targetLang,cleanSource,key,cleanTarget,source || "ai",userId || null]
+  );
+  return rows[0] || null;
+}
+
 // Recomputes confidence_score and the high_confidence flag from real signals
 // only: usage, DISTINCT contributors, and open reports. Never influenced by
 // the same user repeating a request. Called any time one of those inputs
