@@ -260,6 +260,14 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   }
   if (sourceLang === targetLang) return res.status(400).json({ error: "Source and target language must be different." });
 
+  // Translation memory comes first. Unlike the word dictionary, this table
+  // stores complete sentences, paragraphs and page-sized translations.
+  const memoryHit = await db.findTranslationMemory(text, sourceLang, targetLang);
+  if (memoryHit) {
+    console.log(`[TRANSLATION_MEMORY_HIT] ${sourceLang}->${targetLang}`);
+    return res.json(memoryHit);
+  }
+
   // Dictionary-first, always — this is what keeps BembaHub working at all
   // once Gemini's quota is exhausted, and it's why most requests never touch
   // Gemini to begin with.
@@ -268,6 +276,14 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
     console.log(`[DICTIONARY_HIT] ${sourceLang}->${targetLang} direct`);
     db.recordTranslationUsage({ en: text.trim(), bm: hit.translation.trim(), sourceLang, targetLang, source: hit.source, userId: req.user ? req.user.id : null })
       .catch((e) => console.error("[dictionary-save]", e));
+    db.recordTranslationMemory({
+      sourceText: text.trim(),
+      targetText: hit.translation.trim(),
+      sourceLang,
+      targetLang,
+      source: hit.source || "dictionary",
+      userId: req.user ? req.user.id : null,
+    }).catch((e) => console.error("[translation-memory-save]", e));
     return res.json(hit);
   }
 
@@ -297,6 +313,14 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
     if (!translation) return res.status(404).json({ error: "Word not found." });
     db.recordTranslationUsage({ en: text.trim(), bm: translation, sourceLang, targetLang, source: "ai", userId: req.user ? req.user.id : null })
       .catch((e) => console.error("[dictionary-save]", e));
+    db.recordTranslationMemory({
+      sourceText: text.trim(),
+      targetText: translation,
+      sourceLang,
+      targetLang,
+      source: "ai",
+      userId: req.user ? req.user.id : null,
+    }).catch((e) => console.error("[translation-memory-save]", e));
     res.json({
       translation, source: "ai",
       label: viaEnglish
