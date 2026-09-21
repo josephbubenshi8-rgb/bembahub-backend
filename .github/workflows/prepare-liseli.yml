@@ -2,6 +2,9 @@ name: Prepare Liseli Dictionary Pack
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/prepare-liseli.yml"
 
 permissions:
   contents: write
