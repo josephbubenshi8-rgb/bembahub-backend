@@ -972,7 +972,7 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 db.initSchema()
-  .then(() => app.listen(PORT, () => console.log(`Server running on port ${PORT}`)))
+  .then(() => {\n    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));\n    resumeLiseliJobAfterStartup().catch((err) => console.error("[LISELI_RESUME]", err));\n  })
   .catch((err) => {
     console.error("Failed to initialize database schema:", err);
     process.exit(1);
