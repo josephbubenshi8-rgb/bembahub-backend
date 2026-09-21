@@ -818,7 +818,8 @@ app.get("/admin/translation-memory/stats", requireAuth, requireRole("admin"), as
    Progress is persisted after every batch so Render restarts can resume.
 ══════════════════════════════════════════ */
 const LISELI_DATASET = "GiJoeHansFranz/Liseli";
-const LISELI_PARQUET_API = "https://huggingface.co/api/datasets/GiJoeHansFranz/Liseli/parquet/dictionary/train";
+const LISELI_PARQUET_API = "https://datasets-server.huggingface.co/parquet?dataset=GiJoeHansFranz%2FLiseli";
+const LISELI_HUB_PARQUET_API = "https://huggingface.co/api/datasets/GiJoeHansFranz/Liseli/parquet/dictionary/train";
 const LISELI_TOTAL_ROWS = 43010;
 const LISELI_BATCH_SIZE = 250;
 const LISELI_SOURCE_NAME = "Liseli — Zambian Language Dataset";
@@ -867,28 +868,79 @@ async function fetchWithRetry(url, options = {}, attempts = 5) {
 }
 
 async function getLiseliParquetUrl() {
-  const response = await fetchWithRetry(LISELI_PARQUET_API);
-  const payload = await response.json();
-  const urls = Array.isArray(payload) ? payload : (
-    Array.isArray(payload.parquet_files) ? payload.parquet_files.map(item => item.url) : []
-  );
-  const url = urls.find(Boolean);
-  if (!url) throw new Error("Hugging Face returned no Parquet file for the Liseli dictionary.");
-  return url;
+  let lastDiscoveryError = null;
+
+  // Primary: documented Dataset Viewer endpoint. It returns parquet_files
+  // with dataset/config/split/url metadata.
+  try {
+    const response = await fetchWithRetry(LISELI_PARQUET_API);
+    const payload = await response.json();
+    const files = Array.isArray(payload.parquet_files) ? payload.parquet_files : [];
+    const match = files.find(item =>
+      item &&
+      item.config === "dictionary" &&
+      item.split === "train" &&
+      typeof item.url === "string" &&
+      item.url
+    );
+    if (match) return match.url;
+
+    const failed = Array.isArray(payload.failed) ? payload.failed.map(x => x?.error || x?.message || String(x)).slice(0, 2) : [];
+    const pending = Array.isArray(payload.pending) ? payload.pending.length : 0;
+    lastDiscoveryError = new Error(
+      "Dataset Viewer returned no dictionary/train Parquet file" +
+      (pending ? " (conversion pending)" : "") +
+      (failed.length ? ": " + failed.join(" | ") : ".")
+    );
+  } catch (err) {
+    lastDiscoveryError = err;
+  }
+
+  // Fallback: documented Hugging Face Hub Parquet API for a specific
+  // config/split.
+  try {
+    const response = await fetchWithRetry(LISELI_HUB_PARQUET_API);
+    const payload = await response.json();
+    const urls = Array.isArray(payload) ? payload : [];
+    const url = urls.find(item => typeof item === "string" && item);
+    if (url) return url;
+    throw new Error("Hub Parquet API returned no file URL.");
+  } catch (fallbackError) {
+    const primary = lastDiscoveryError?.message || "unknown primary discovery error";
+    throw new Error(
+      "[parquet_discovery] Dataset Viewer failed: " + primary +
+      " | Hub API failed: " + (fallbackError?.message || "unknown fallback error")
+    );
+  }
 }
 
 async function downloadLiseliParquet(tempPath) {
-  const parquetUrl = await getLiseliParquetUrl();
-  const response = await fetchWithRetry(parquetUrl);
-  const fileHandle = await fs.open(tempPath, "w");
+  let parquetUrl;
   try {
-    for await (const chunk of response.body) {
-      await fileHandle.write(chunk);
-    }
-  } finally {
-    await fileHandle.close();
+    parquetUrl = await getLiseliParquetUrl();
+  } catch (err) {
+    throw new Error(err.message.startsWith("[parquet_discovery]") ? err.message : "[parquet_discovery] " + err.message);
   }
-  return parquetUrl;
+
+  try {
+    const response = await fetchWithRetry(parquetUrl);
+    if (!response.body) throw new Error("Hugging Face returned an empty Parquet response body.");
+
+    const fileHandle = await fs.open(tempPath, "w");
+    try {
+      for await (const chunk of response.body) {
+        await fileHandle.write(chunk);
+      }
+    } finally {
+      await fileHandle.close();
+    }
+
+    const stat = await fs.stat(tempPath);
+    if (!stat.size) throw new Error("Downloaded Parquet file is empty.");
+    return parquetUrl;
+  } catch (err) {
+    throw new Error("[parquet_download] " + (err?.message || err));
+  }
 }
 
 async function runLiseliJob(jobId) {
@@ -911,9 +963,14 @@ async function runLiseliJob(jobId) {
     const parquetUrl = await downloadLiseliParquet(tempPath);
     console.log("[LISELI_PARQUET_READY]", parquetUrl);
 
-    const parquetModule = await import("parquetjs-lite");
-    const parquet = parquetModule.default || parquetModule;
-    reader = await parquet.ParquetReader.openFile(tempPath);
+    let parquet;
+    try {
+      const parquetModule = await import("parquetjs-lite");
+      parquet = parquetModule.default || parquetModule;
+      reader = await parquet.ParquetReader.openFile(tempPath);
+    } catch (err) {
+      throw new Error("[parquet_reader] " + (err?.message || err));
+    }
     const cursor = reader.getCursor();
 
     let rowIndex = 0;
@@ -953,25 +1010,34 @@ async function runLiseliJob(jobId) {
       }
 
       if (batch.length) {
-        const result = await db.bulkImportDictionary({
-          entries: batch,
-          sourceName: LISELI_SOURCE_NAME,
-          sourceUrl: LISELI_SOURCE_URL,
-          sourceLicense: LISELI_SOURCE_LICENSE,
-          importedBy: job.created_by,
-          defaultStatus: "unverified"
-        });
+        let result;
+        try {
+          result = await db.bulkImportDictionary({
+            entries: batch,
+            sourceName: LISELI_SOURCE_NAME,
+            sourceUrl: LISELI_SOURCE_URL,
+            sourceLicense: LISELI_SOURCE_LICENSE,
+            importedBy: job.created_by,
+            defaultStatus: "unverified"
+          });
+        } catch (err) {
+          throw new Error("[database_import] " + (err?.message || err));
+        }
 
         const processed = rowIndex;
         const imported = Number(job.imported_count || 0) + Number(result.importedCount || 0);
         const skipped = Number(job.skipped_count || 0) + Number(result.skippedCount || 0);
 
-        job = await updateLiseliJob(jobId, {
-          next_offset: processed,
-          processed_rows: processed,
-          imported_count: imported,
-          skipped_count: skipped
-        });
+        try {
+          job = await updateLiseliJob(jobId, {
+            next_offset: processed,
+            processed_rows: processed,
+            imported_count: imported,
+            skipped_count: skipped
+          });
+        } catch (err) {
+          throw new Error("[progress_update] " + (err?.message || err));
+        }
 
         console.log("[LISELI_PROGRESS]", JSON.stringify({
           jobId, processed, total: LISELI_TOTAL_ROWS, imported, skipped
