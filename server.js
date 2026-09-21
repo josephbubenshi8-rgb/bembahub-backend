@@ -813,15 +813,14 @@ app.get("/admin/translation-memory/stats", requireAuth, requireRole("admin"), as
 }));
 
 /* ══════════════════════════════════════════
-   RESUMABLE LISELI 7-LANGUAGE PARQUET IMPORT
-   Downloads the Hugging Face Parquet file and reads it locally.
-   Progress is persisted after every batch so Render restarts can resume.
+   RESUMABLE LISELI 7-LANGUAGE ROW IMPORT
+   Uses Hugging Face Dataset Viewer /rows in 100-row pages.
+   Progress is persisted after every page so Render restarts resume.
 ══════════════════════════════════════════ */
 const LISELI_DATASET = "GiJoeHansFranz/Liseli";
-const LISELI_PARQUET_API = "https://datasets-server.huggingface.co/parquet?dataset=GiJoeHansFranz%2FLiseli";
-const LISELI_HUB_PARQUET_API = "https://huggingface.co/api/datasets/GiJoeHansFranz/Liseli/parquet/dictionary/train";
+const LISELI_ROWS_API = "https://datasets-server.huggingface.co/rows";
 const LISELI_TOTAL_ROWS = 43010;
-const LISELI_BATCH_SIZE = 250;
+const LISELI_PAGE_SIZE = 100;
 const LISELI_SOURCE_NAME = "Liseli — Zambian Language Dataset";
 const LISELI_SOURCE_URL = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli";
 const LISELI_SOURCE_LICENSE = "CC-BY-SA-4.0 — retain attribution and comply with upstream licenses.";
@@ -844,110 +843,39 @@ async function updateLiseliJob(id, patch) {
   return rows[0] || null;
 }
 
-async function fetchWithRetry(url, options = {}, attempts = 5) {
+async function fetchLiseliRows(offset) {
+  const url = new URL(LISELI_ROWS_API);
+  url.searchParams.set("dataset", LISELI_DATASET);
+  url.searchParams.set("config", "dictionary");
+  url.searchParams.set("split", "train");
+  url.searchParams.set("offset", String(offset));
+  url.searchParams.set("length", String(LISELI_PAGE_SIZE));
+
   let lastError = null;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
     try {
       const response = await fetch(url, {
-        ...options,
-        headers: {
-          "User-Agent": "BembaHub-Liseli-Parquet-Importer/1.0",
-          ...(options.headers || {}),
-        },
-        signal: AbortSignal.timeout(120000),
+        headers: { "User-Agent": "BembaHub-Liseli-Rows-Importer/1.0" },
+        signal: AbortSignal.timeout(30000),
       });
-      if (response.ok) return response;
+      if (response.ok) return await response.json();
       lastError = new Error("HTTP " + response.status);
-      if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, attempt * 5000));
+      if (attempt < 5 && ![400,401,403,404].includes(response.status)) {
+        await new Promise(resolve => setTimeout(resolve, attempt * 3000));
+        continue;
+      }
+      break;
     } catch (err) {
       lastError = err;
-      if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, attempt * 5000));
+      if (attempt < 5) await new Promise(resolve => setTimeout(resolve, attempt * 3000));
     }
   }
-  throw new Error((lastError && lastError.message ? lastError.message : "request failed") + " after " + attempts + " attempts");
-}
-
-async function getLiseliParquetUrl() {
-  let lastDiscoveryError = null;
-
-  // Primary: documented Dataset Viewer endpoint. It returns parquet_files
-  // with dataset/config/split/url metadata.
-  try {
-    const response = await fetchWithRetry(LISELI_PARQUET_API);
-    const payload = await response.json();
-    const files = Array.isArray(payload.parquet_files) ? payload.parquet_files : [];
-    const match = files.find(item =>
-      item &&
-      item.config === "dictionary" &&
-      item.split === "train" &&
-      typeof item.url === "string" &&
-      item.url
-    );
-    if (match) return match.url;
-
-    const failed = Array.isArray(payload.failed) ? payload.failed.map(x => x?.error || x?.message || String(x)).slice(0, 2) : [];
-    const pending = Array.isArray(payload.pending) ? payload.pending.length : 0;
-    lastDiscoveryError = new Error(
-      "Dataset Viewer returned no dictionary/train Parquet file" +
-      (pending ? " (conversion pending)" : "") +
-      (failed.length ? ": " + failed.join(" | ") : ".")
-    );
-  } catch (err) {
-    lastDiscoveryError = err;
-  }
-
-  // Fallback: documented Hugging Face Hub Parquet API for a specific
-  // config/split.
-  try {
-    const response = await fetchWithRetry(LISELI_HUB_PARQUET_API);
-    const payload = await response.json();
-    const urls = Array.isArray(payload) ? payload : [];
-    const url = urls.find(item => typeof item === "string" && item);
-    if (url) return url;
-    throw new Error("Hub Parquet API returned no file URL.");
-  } catch (fallbackError) {
-    const primary = lastDiscoveryError?.message || "unknown primary discovery error";
-    throw new Error(
-      "[parquet_discovery] Dataset Viewer failed: " + primary +
-      " | Hub API failed: " + (fallbackError?.message || "unknown fallback error")
-    );
-  }
-}
-
-async function downloadLiseliParquet(tempPath) {
-  let parquetUrl;
-  try {
-    parquetUrl = await getLiseliParquetUrl();
-  } catch (err) {
-    throw new Error(err.message.startsWith("[parquet_discovery]") ? err.message : "[parquet_discovery] " + err.message);
-  }
-
-  try {
-    const response = await fetchWithRetry(parquetUrl);
-    if (!response.body) throw new Error("Hugging Face returned an empty Parquet response body.");
-
-    const fileHandle = await fs.open(tempPath, "w");
-    try {
-      for await (const chunk of response.body) {
-        await fileHandle.write(chunk);
-      }
-    } finally {
-      await fileHandle.close();
-    }
-
-    const stat = await fs.stat(tempPath);
-    if (!stat.size) throw new Error("Downloaded Parquet file is empty.");
-    return parquetUrl;
-  } catch (err) {
-    throw new Error("[parquet_download] " + (err?.message || err));
-  }
+  throw new Error("[rows_fetch] " + (lastError?.message || "Hugging Face rows request failed") + " after 5 attempts");
 }
 
 async function runLiseliJob(jobId) {
   if (liseliWorkerRunning) return;
   liseliWorkerRunning = true;
-  let tempPath = null;
-  let reader = null;
   try {
     let job = await getLiseliJob(jobId);
     if (!job || ["completed","failed"].includes(job.status)) return;
@@ -958,47 +886,41 @@ async function runLiseliJob(jobId) {
       error_message:null
     });
 
-    const tempDir = await fs.mkdtemp(path.join("/tmp/", "bembahub-liseli-"));
-    tempPath = path.join(tempDir, "dictionary.parquet");
-    const parquetUrl = await downloadLiseliParquet(tempPath);
-    console.log("[LISELI_PARQUET_READY]", parquetUrl);
-
-    let parquet;
-    try {
-      const parquetModule = await import("parquetjs-lite");
-      parquet = parquetModule.default || parquetModule;
-      reader = await parquet.ParquetReader.openFile(tempPath);
-    } catch (err) {
-      throw new Error("[parquet_reader] " + (err?.message || err));
-    }
-    const cursor = reader.getCursor();
-
-    let rowIndex = 0;
-    let batch = [];
-
-    // Skip rows already committed before a Render restart.
-    while (rowIndex < Number(job.next_offset || 0)) {
-      const row = await cursor.next();
-      if (row === null || row === undefined) break;
-      rowIndex++;
-    }
-
     while (true) {
       job = await getLiseliJob(jobId);
       if (!job || ["completed","failed","paused"].includes(job.status)) break;
 
-      batch = [];
-      while (batch.length < LISELI_BATCH_SIZE) {
-        const row = await cursor.next();
-        if (row === null || row === undefined) break;
-        rowIndex++;
+      const offset = Number(job.next_offset || 0);
+      if (offset >= LISELI_TOTAL_ROWS) {
+        await updateLiseliJob(jobId, {
+          status:"completed",
+          next_offset:LISELI_TOTAL_ROWS,
+          processed_rows:LISELI_TOTAL_ROWS,
+          completed_at:new Date().toISOString()
+        });
+        break;
+      }
 
+      const payload = await fetchLiseliRows(offset);
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      if (!rows.length) {
+        await updateLiseliJob(jobId, {
+          status:"completed",
+          next_offset:offset,
+          processed_rows:offset,
+          completed_at:new Date().toISOString()
+        });
+        break;
+      }
+
+      const entries = [];
+      for (const item of rows) {
+        const row = item?.row || {};
         const target = LISELI_LANG_MAP[String(row.language || "").trim().toLowerCase()];
         const english = String(row.english || "").trim();
         const translation = String(row.translation || "").trim();
         if (!target || !english || !translation) continue;
-
-        batch.push({
+        entries.push({
           en: english,
           bm: translation,
           sourceLang: "eng",
@@ -1009,11 +931,11 @@ async function runLiseliJob(jobId) {
         });
       }
 
-      if (batch.length) {
-        let result;
+      let result = { importedCount: 0, skippedCount: 0 };
+      if (entries.length) {
         try {
           result = await db.bulkImportDictionary({
-            entries: batch,
+            entries,
             sourceName: LISELI_SOURCE_NAME,
             sourceUrl: LISELI_SOURCE_URL,
             sourceLicense: LISELI_SOURCE_LICENSE,
@@ -1023,37 +945,35 @@ async function runLiseliJob(jobId) {
         } catch (err) {
           throw new Error("[database_import] " + (err?.message || err));
         }
-
-        const processed = rowIndex;
-        const imported = Number(job.imported_count || 0) + Number(result.importedCount || 0);
-        const skipped = Number(job.skipped_count || 0) + Number(result.skippedCount || 0);
-
-        try {
-          job = await updateLiseliJob(jobId, {
-            next_offset: processed,
-            processed_rows: processed,
-            imported_count: imported,
-            skipped_count: skipped
-          });
-        } catch (err) {
-          throw new Error("[progress_update] " + (err?.message || err));
-        }
-
-        console.log("[LISELI_PROGRESS]", JSON.stringify({
-          jobId, processed, total: LISELI_TOTAL_ROWS, imported, skipped
-        }));
       }
 
-      if (rowIndex >= LISELI_TOTAL_ROWS || batch.length === 0) {
+      const processed = Math.min(offset + rows.length, LISELI_TOTAL_ROWS);
+      const imported = Number(job.imported_count || 0) + Number(result.importedCount || 0);
+      const skipped = Number(job.skipped_count || 0) + Number(result.skippedCount || 0);
+
+      try {
+        job = await updateLiseliJob(jobId, {
+          next_offset:processed,
+          processed_rows:processed,
+          imported_count:imported,
+          skipped_count:skipped
+        });
+      } catch (err) {
+        throw new Error("[progress_update] " + (err?.message || err));
+      }
+
+      console.log("[LISELI_PROGRESS]", JSON.stringify({ jobId, processed, total:LISELI_TOTAL_ROWS, imported, skipped }));
+
+      if (processed >= LISELI_TOTAL_ROWS || rows.length < LISELI_PAGE_SIZE) {
         await updateLiseliJob(jobId, {
           status:"completed",
-          next_offset:Math.min(rowIndex, LISELI_TOTAL_ROWS),
-          processed_rows:Math.min(rowIndex, LISELI_TOTAL_ROWS),
+          next_offset:processed,
+          processed_rows:processed,
           completed_at:new Date().toISOString()
         });
         const latest = await getLiseliJob(jobId);
         await db.logActivity(
-          "Liseli 7-language dictionary import #" + jobId + " completed: " +
+          "Liseli 7-language row import #" + jobId + " completed: " +
           Number(latest && latest.imported_count || 0).toLocaleString() + " imported",
           "green"
         );
@@ -1069,14 +989,6 @@ async function runLiseliJob(jobId) {
       error_message:String((err && err.message) || err).slice(0,1000)
     }).catch(() => {});
   } finally {
-    if (reader) {
-      try { await reader.close(); } catch (_) {}
-    }
-    if (tempPath) {
-      try {
-        await fs.rm(path.dirname(tempPath), { recursive:true, force:true });
-      } catch (_) {}
-    }
     liseliWorkerRunning = false;
   }
 }
@@ -1089,7 +1001,7 @@ app.post("/admin/dictionary/import-liseli/start", requireAuth, requireRole("admi
     [LISELI_SOURCE_NAME,LISELI_SOURCE_URL,LISELI_SOURCE_LICENSE,LISELI_TOTAL_ROWS,req.user.id]
   );
   const job = created[0];
-  await db.logActivity("Liseli 7-language Parquet import #" + job.id + " started by " + req.user.name, "sky");
+  await db.logActivity("Liseli 7-language row import #" + job.id + " started by " + req.user.name, "sky");
   setImmediate(() => runLiseliJob(job.id));
   res.status(202).json({ success:true, job });
 }));
