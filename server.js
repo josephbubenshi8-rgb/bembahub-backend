@@ -818,9 +818,9 @@ app.get("/admin/translation-memory/stats", requireAuth, requireRole("admin"), as
    Progress is persisted after every page so Render restarts resume.
 ══════════════════════════════════════════ */
 const LISELI_DATASET = "GiJoeHansFranz/Liseli";
-const LISELI_ROWS_API = "https://datasets-server.huggingface.co/rows";
+const LISELI_PARQUET_URL = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli/resolve/main/dictionary/entries.parquet";
 const LISELI_TOTAL_ROWS = 43010;
-const LISELI_PAGE_SIZE = 100;
+const LISELI_BATCH_SIZE = 250;
 const LISELI_SOURCE_NAME = "Liseli — Zambian Language Dataset";
 const LISELI_SOURCE_URL = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli";
 const LISELI_SOURCE_LICENSE = "CC-BY-SA-4.0 — retain attribution and comply with upstream licenses.";
@@ -843,34 +843,47 @@ async function updateLiseliJob(id, patch) {
   return rows[0] || null;
 }
 
-async function fetchLiseliRows(offset) {
-  const url = new URL(LISELI_ROWS_API);
-  url.searchParams.set("dataset", LISELI_DATASET);
-  url.searchParams.set("config", "dictionary");
-  url.searchParams.set("split", "train");
-  url.searchParams.set("offset", String(offset));
-  url.searchParams.set("length", String(LISELI_PAGE_SIZE));
-
+/*
+ * Liseli importer
+ *
+ * The Dataset Viewer /rows endpoint is generated on demand and was returning
+ * HTTP 500 for this dataset. The dataset card declares the dictionary as the
+ * real file dictionary/entries.parquet, so BembaHub now reads that source
+ * file directly from the Hugging Face Hub instead of going through
+ * datasets-server. This keeps the import resumable and removes the failing
+ * /rows dependency.
+ */
+async function downloadLiseliDictionary() {
   let lastError = null;
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
-      const response = await fetch(url, {
-        headers: { "User-Agent": "BembaHub-Liseli-Rows-Importer/1.0" },
-        signal: AbortSignal.timeout(30000),
+      const response = await fetch(LISELI_PARQUET_URL, {
+        headers: {
+          "User-Agent": "BembaHub-Liseli-Importer/2.0",
+          "Accept": "application/octet-stream"
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(120000),
       });
-      if (response.ok) return await response.json();
-      lastError = new Error("HTTP " + response.status);
-      if (attempt < 5 && ![400,401,403,404].includes(response.status)) {
-        await new Promise(resolve => setTimeout(resolve, attempt * 3000));
-        continue;
+      if (!response.ok) {
+        lastError = new Error("HTTP " + response.status);
+        if (attempt < 5 && ![400,401,403,404].includes(response.status)) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 5000));
+          continue;
+        }
+        break;
       }
-      break;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (!buffer.length) throw new Error("Hugging Face returned an empty dictionary file.");
+      console.log("[LISELI_FILE_READY]", JSON.stringify({ bytes: buffer.length }));
+      return buffer;
     } catch (err) {
       lastError = err;
-      if (attempt < 5) await new Promise(resolve => setTimeout(resolve, attempt * 3000));
+      console.error("[LISELI_FILE_FETCH]", attempt, err?.message || err);
+      if (attempt < 5) await new Promise(resolve => setTimeout(resolve, attempt * 5000));
     }
   }
-  throw new Error("[rows_fetch] " + (lastError?.message || "Hugging Face rows request failed") + " after 5 attempts");
+  throw new Error("[liseli_file_fetch] " + (lastError?.message || "Hugging Face dictionary file request failed") + " after 5 attempts");
 }
 
 async function runLiseliJob(jobId) {
@@ -886,41 +899,36 @@ async function runLiseliJob(jobId) {
       error_message:null
     });
 
+    const parquetjs = await import("parquetjs-lite");
+    const ParquetReader = parquetjs.default?.ParquetReader || parquetjs.ParquetReader;
+    if (!ParquetReader?.openBuffer) {
+      throw new Error("[parquet_reader] parquetjs-lite does not expose openBuffer().");
+    }
+
+    const buffer = await downloadLiseliDictionary();
+    const reader = await ParquetReader.openBuffer(buffer);
+    const cursor = reader.getCursor();
+
+    let rowIndex = 0;
+    let pending = [];
+    let importedTotal = Number(job.imported_count || 0);
+    let skippedTotal = Number(job.skipped_count || 0);
+    const resumeOffset = Number(job.next_offset || 0);
+
     while (true) {
       job = await getLiseliJob(jobId);
       if (!job || ["completed","failed","paused"].includes(job.status)) break;
 
-      const offset = Number(job.next_offset || 0);
-      if (offset >= LISELI_TOTAL_ROWS) {
-        await updateLiseliJob(jobId, {
-          status:"completed",
-          next_offset:LISELI_TOTAL_ROWS,
-          processed_rows:LISELI_TOTAL_ROWS,
-          completed_at:new Date().toISOString()
-        });
-        break;
-      }
+      const row = await cursor.next();
+      if (!row) break;
 
-      const payload = await fetchLiseliRows(offset);
-      const rows = Array.isArray(payload.rows) ? payload.rows : [];
-      if (!rows.length) {
-        await updateLiseliJob(jobId, {
-          status:"completed",
-          next_offset:offset,
-          processed_rows:offset,
-          completed_at:new Date().toISOString()
-        });
-        break;
-      }
+      if (rowIndex++ < resumeOffset) continue;
 
-      const entries = [];
-      for (const item of rows) {
-        const row = item?.row || {};
-        const target = LISELI_LANG_MAP[String(row.language || "").trim().toLowerCase()];
-        const english = String(row.english || "").trim();
-        const translation = String(row.translation || "").trim();
-        if (!target || !english || !translation) continue;
-        entries.push({
+      const target = LISELI_LANG_MAP[String(row.language || "").trim().toLowerCase()];
+      const english = String(row.english || "").trim();
+      const translation = String(row.translation || "").trim();
+      if (target && english && translation) {
+        pending.push({
           en: english,
           bm: translation,
           sourceLang: "eng",
@@ -931,11 +939,11 @@ async function runLiseliJob(jobId) {
         });
       }
 
-      let result = { importedCount: 0, skippedCount: 0 };
-      if (entries.length) {
+      if (pending.length >= LISELI_BATCH_SIZE) {
+        let result;
         try {
           result = await db.bulkImportDictionary({
-            entries,
+            entries: pending,
             sourceName: LISELI_SOURCE_NAME,
             sourceUrl: LISELI_SOURCE_URL,
             sourceLicense: LISELI_SOURCE_LICENSE,
@@ -945,43 +953,65 @@ async function runLiseliJob(jobId) {
         } catch (err) {
           throw new Error("[database_import] " + (err?.message || err));
         }
+
+        importedTotal += Number(result.importedCount || 0);
+        skippedTotal += Number(result.skippedCount || 0);
+
+        try {
+          job = await updateLiseliJob(jobId, {
+            next_offset: rowIndex,
+            processed_rows: rowIndex,
+            imported_count: importedTotal,
+            skipped_count: skippedTotal
+          });
+        } catch (err) {
+          throw new Error("[progress_update] " + (err?.message || err));
+        }
+
+        pending = [];
+        console.log("[LISELI_PROGRESS]", JSON.stringify({
+          jobId, processed: rowIndex, total: LISELI_TOTAL_ROWS,
+          imported: importedTotal, skipped: skippedTotal
+        }));
       }
-
-      const processed = Math.min(offset + rows.length, LISELI_TOTAL_ROWS);
-      const imported = Number(job.imported_count || 0) + Number(result.importedCount || 0);
-      const skipped = Number(job.skipped_count || 0) + Number(result.skippedCount || 0);
-
-      try {
-        job = await updateLiseliJob(jobId, {
-          next_offset:processed,
-          processed_rows:processed,
-          imported_count:imported,
-          skipped_count:skipped
-        });
-      } catch (err) {
-        throw new Error("[progress_update] " + (err?.message || err));
-      }
-
-      console.log("[LISELI_PROGRESS]", JSON.stringify({ jobId, processed, total:LISELI_TOTAL_ROWS, imported, skipped }));
-
-      if (processed >= LISELI_TOTAL_ROWS || rows.length < LISELI_PAGE_SIZE) {
-        await updateLiseliJob(jobId, {
-          status:"completed",
-          next_offset:processed,
-          processed_rows:processed,
-          completed_at:new Date().toISOString()
-        });
-        const latest = await getLiseliJob(jobId);
-        await db.logActivity(
-          "Liseli 7-language row import #" + jobId + " completed: " +
-          Number(latest && latest.imported_count || 0).toLocaleString() + " imported",
-          "green"
-        );
-        break;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 50));
     }
+
+    if (job && job.status !== "paused") {
+      if (pending.length) {
+        let result;
+        try {
+          result = await db.bulkImportDictionary({
+            entries: pending,
+            sourceName: LISELI_SOURCE_NAME,
+            sourceUrl: LISELI_SOURCE_URL,
+            sourceLicense: LISELI_SOURCE_LICENSE,
+            importedBy: job.created_by,
+            defaultStatus: "unverified"
+          });
+        } catch (err) {
+          throw new Error("[database_import] " + (err?.message || err));
+        }
+        importedTotal += Number(result.importedCount || 0);
+        skippedTotal += Number(result.skippedCount || 0);
+      }
+
+      await updateLiseliJob(jobId, {
+        status:"completed",
+        next_offset:Math.min(rowIndex, LISELI_TOTAL_ROWS),
+        processed_rows:Math.min(rowIndex, LISELI_TOTAL_ROWS),
+        imported_count:importedTotal,
+        skipped_count:skippedTotal,
+        completed_at:new Date().toISOString()
+      });
+
+      await db.logActivity(
+        "Liseli 7-language direct-file import #" + jobId + " completed: " +
+        Number(importedTotal).toLocaleString() + " imported",
+        "green"
+      );
+    }
+
+    await reader.close();
   } catch (err) {
     console.error("[LISELI_IMPORT_FAILED]", err);
     await updateLiseliJob(jobId, {
