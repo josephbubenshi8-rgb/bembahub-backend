@@ -854,68 +854,28 @@ async function updateLiseliJob(id, patch) {
  * /rows dependency.
  */
 async function downloadLiseliDictionary() {
+  // Liseli's own README declares the dictionary source file as:
+  // dictionary/entries.parquet. Read that real file directly from the dataset
+  // instead of using Dataset Viewer conversion URLs, which are currently
+  // returning 404s for this dataset.
+  const fileUrl = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli/resolve/main/dictionary/entries.parquet";
   let lastError = null;
+
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
-      // Use Hugging Face's documented Hub API to get the ACTUAL Parquet URLs.
-      // This avoids guessing filenames such as 0000.parquet.
-      const listUrl = "https://huggingface.co/api/datasets/GiJoeHansFranz/Liseli/parquet/dictionary/train";
-      const discovery = await fetch(listUrl, {
+      console.log("[LISELI_FILE_FETCH_ATTEMPT]", attempt, fileUrl);
+
+      const response = await fetch(fileUrl, {
         headers: {
-          "User-Agent": "BembaHub-Liseli-Importer/3.0",
-          "Accept": "application/json"
+          "User-Agent": "BembaHub-Liseli-Importer/4.0",
+          "Accept": "application/octet-stream"
         },
-        signal: AbortSignal.timeout(30000),
+        redirect: "follow",
+        signal: AbortSignal.timeout(120000),
       });
 
-      if (!discovery.ok) {
-        throw new Error("Parquet URL discovery HTTP " + discovery.status);
-      }
-
-      const urls = await discovery.json();
-      const candidates = Array.isArray(urls)
-        ? urls.filter((u) => typeof u === "string" && u)
-        : [];
-
-      if (!candidates.length) {
-        throw new Error("Hugging Face returned no dictionary/train Parquet URLs.");
-      }
-
-      console.log("[LISELI_PARQUET_URLS]", JSON.stringify(candidates));
-
-      let response = null;
-      let lastDownloadError = null;
-
-      for (const fileUrl of candidates) {
-        try {
-          const candidate = await fetch(fileUrl, {
-            headers: {
-              "User-Agent": "BembaHub-Liseli-Importer/3.0",
-              "Accept": "application/octet-stream"
-            },
-            redirect: "follow",
-            signal: AbortSignal.timeout(120000),
-          });
-
-          if (candidate.ok) {
-            response = candidate;
-            console.log("[LISELI_PARQUET_DOWNLOAD_OK]", fileUrl);
-            break;
-          }
-
-          lastDownloadError = new Error("HTTP " + candidate.status + " for " + fileUrl);
-          console.error("[LISELI_PARQUET_DOWNLOAD_ATTEMPT]", lastDownloadError.message);
-        } catch (err) {
-          lastDownloadError = err;
-          console.error("[LISELI_PARQUET_DOWNLOAD_ATTEMPT]", err?.message || err);
-        }
-      }
-
-      if (!response) {
-        throw new Error(
-          "All discovered Parquet URLs failed: " +
-          (lastDownloadError?.message || "HTTP error")
-        );
+      if (!response.ok) {
+        throw new Error("Parquet source HTTP " + response.status);
       }
 
       const contentType = String(response.headers.get("content-type") || "").toLowerCase();
@@ -926,7 +886,7 @@ async function downloadLiseliDictionary() {
 
       if (header !== "PAR1" || footer !== "PAR1") {
         throw new Error(
-          "Hugging Face returned non-Parquet data (content-type " +
+          "Liseli source returned non-Parquet data (content-type " +
           (contentType || "unknown") + ", size " + buffer.length + " bytes)."
         );
       }
@@ -934,7 +894,7 @@ async function downloadLiseliDictionary() {
       console.log("[LISELI_FILE_READY]", JSON.stringify({
         bytes: buffer.length,
         contentType,
-        urlsFound: candidates.length
+        source: fileUrl
       }));
 
       return buffer;
@@ -949,7 +909,7 @@ async function downloadLiseliDictionary() {
 
   throw new Error(
     "[liseli_file_fetch] " +
-    (lastError?.message || "Hugging Face dictionary file request failed") +
+    (lastError?.message || "Liseli dictionary file request failed") +
     " after 5 attempts"
   );
 }
