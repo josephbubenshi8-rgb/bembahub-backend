@@ -813,14 +813,14 @@ app.get("/admin/translation-memory/stats", requireAuth, requireRole("admin"), as
 }));
 
 /* ══════════════════════════════════════════
-   RESUMABLE LISELI 7-LANGUAGE IMPORT
-   Processes Hugging Face /rows in 100-row pages and persists
-   progress so the import can resume after a restart.
+   RESUMABLE LISELI 7-LANGUAGE PARQUET IMPORT
+   Downloads the Hugging Face Parquet file and reads it locally.
+   Progress is persisted after every batch so Render restarts can resume.
 ══════════════════════════════════════════ */
 const LISELI_DATASET = "GiJoeHansFranz/Liseli";
-const LISELI_API = "https://datasets-server.huggingface.co/rows";
+const LISELI_PARQUET_API = "https://huggingface.co/api/datasets/GiJoeHansFranz/Liseli/parquet/dictionary/train";
 const LISELI_TOTAL_ROWS = 43010;
-const LISELI_PAGE_SIZE = 100;
+const LISELI_BATCH_SIZE = 250;
 const LISELI_SOURCE_NAME = "Liseli — Zambian Language Dataset";
 const LISELI_SOURCE_URL = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli";
 const LISELI_SOURCE_LICENSE = "CC-BY-SA-4.0 — retain attribution and comply with upstream licenses.";
@@ -843,86 +843,174 @@ async function updateLiseliJob(id, patch) {
   return rows[0] || null;
 }
 
+async function fetchWithRetry(url, options = {}, attempts = 5) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          "User-Agent": "BembaHub-Liseli-Parquet-Importer/1.0",
+          ...(options.headers || {}),
+        },
+        signal: AbortSignal.timeout(120000),
+      });
+      if (response.ok) return response;
+      lastError = new Error("HTTP " + response.status);
+      if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, attempt * 5000));
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, attempt * 5000));
+    }
+  }
+  throw new Error((lastError && lastError.message ? lastError.message : "request failed") + " after " + attempts + " attempts");
+}
+
+async function getLiseliParquetUrl() {
+  const response = await fetchWithRetry(LISELI_PARQUET_API);
+  const payload = await response.json();
+  const urls = Array.isArray(payload) ? payload : (
+    Array.isArray(payload.parquet_files) ? payload.parquet_files.map(item => item.url) : []
+  );
+  const url = urls.find(Boolean);
+  if (!url) throw new Error("Hugging Face returned no Parquet file for the Liseli dictionary.");
+  return url;
+}
+
+async function downloadLiseliParquet(tempPath) {
+  const parquetUrl = await getLiseliParquetUrl();
+  const response = await fetchWithRetry(parquetUrl);
+  const fileHandle = await fs.open(tempPath, "w");
+  try {
+    for await (const chunk of response.body) {
+      await fileHandle.write(chunk);
+    }
+  } finally {
+    await fileHandle.close();
+  }
+  return parquetUrl;
+}
+
 async function runLiseliJob(jobId) {
   if (liseliWorkerRunning) return;
   liseliWorkerRunning = true;
+  let tempPath = null;
+  let reader = null;
   try {
     let job = await getLiseliJob(jobId);
     if (!job || ["completed","failed"].includes(job.status)) return;
-    await updateLiseliJob(jobId, { status:"running", started_at:job.started_at || new Date().toISOString(), error_message:null });
+
+    await updateLiseliJob(jobId, {
+      status:"running",
+      started_at:job.started_at || new Date().toISOString(),
+      error_message:null
+    });
+
+    const tempDir = await fs.mkdtemp(path.join("/tmp/", "bembahub-liseli-"));
+    tempPath = path.join(tempDir, "dictionary.parquet");
+    const parquetUrl = await downloadLiseliParquet(tempPath);
+    console.log("[LISELI_PARQUET_READY]", parquetUrl);
+
+    const parquetModule = await import("parquetjs-lite");
+    const parquet = parquetModule.default || parquetModule;
+    reader = await parquet.ParquetReader.openFile(tempPath);
+    const cursor = reader.getCursor();
+
+    let rowIndex = 0;
+    let batch = [];
+
+    // Skip rows already committed before a Render restart.
+    while (rowIndex < Number(job.next_offset || 0)) {
+      const row = await cursor.next();
+      if (row === null || row === undefined) break;
+      rowIndex++;
+    }
 
     while (true) {
       job = await getLiseliJob(jobId);
       if (!job || ["completed","failed","paused"].includes(job.status)) break;
-      if (job.next_offset >= LISELI_TOTAL_ROWS) {
-        await updateLiseliJob(jobId, { status:"completed", next_offset:LISELI_TOTAL_ROWS, processed_rows:LISELI_TOTAL_ROWS, completed_at:new Date().toISOString() });
-        await db.logActivity("Liseli 7-language dictionary import #" + jobId + " completed", "green");
-        break;
-      }
 
-      const offset = job.next_offset;
-      const url = new URL(LISELI_API);
-      url.searchParams.set("dataset", LISELI_DATASET);
-      url.searchParams.set("config", "dictionary");
-      url.searchParams.set("split", "train");
-      url.searchParams.set("offset", String(offset));
-      url.searchParams.set("length", String(LISELI_PAGE_SIZE));
-      let response;
-      let lastStatus = null;
-      for (let attempt = 1; attempt <= 5; attempt++) {
-        try {
-          response = await fetch(url, {
-            headers: { "User-Agent": "BembaHub-Liseli-Importer/1.0" },
-            signal: AbortSignal.timeout(30000),
-          });
-          if (response.ok) break;
-          lastStatus = response.status;
-        } catch (fetchErr) {
-          lastStatus = fetchErr?.name === "TimeoutError" ? "timeout" : (fetchErr?.message || "network error");
-        }
-        if (attempt < 5) await new Promise(resolve => setTimeout(resolve, attempt * 3000));
-      }
-      if (!response || !response.ok) {
-        throw new Error("Liseli API returned HTTP " + String(lastStatus || "unknown") + " after 5 attempts");
-      }
-      const payload = await response.json();
-      const rows = Array.isArray(payload.rows) ? payload.rows : [];
-      if (!rows.length) {
-        await updateLiseliJob(jobId, { status:"completed", next_offset:LISELI_TOTAL_ROWS, processed_rows:LISELI_TOTAL_ROWS, completed_at:new Date().toISOString() });
-        break;
-      }
+      batch = [];
+      while (batch.length < LISELI_BATCH_SIZE) {
+        const row = await cursor.next();
+        if (row === null || row === undefined) break;
+        rowIndex++;
 
-      const entries = [];
-      for (const item of rows) {
-        const row = item && item.row ? item.row : {};
         const target = LISELI_LANG_MAP[String(row.language || "").trim().toLowerCase()];
         const english = String(row.english || "").trim();
         const translation = String(row.translation || "").trim();
         if (!target || !english || !translation) continue;
-        entries.push({ en:english, bm:translation, sourceLang:"eng", targetLang:target, cat:"General", contrib:"Liseli dataset", status:String(row.status || "").trim().toLowerCase() === "verified" ? "verified" : "unverified" });
+
+        batch.push({
+          en: english,
+          bm: translation,
+          sourceLang: "eng",
+          targetLang: target,
+          cat: "General",
+          contrib: "Liseli dataset",
+          status: String(row.status || "").trim().toLowerCase() === "verified" ? "verified" : "unverified"
+        });
       }
 
-      let importedCount = 0, skippedCount = 0;
-      if (entries.length) {
-        const result = await db.bulkImportDictionary({ entries, sourceName:LISELI_SOURCE_NAME, sourceUrl:LISELI_SOURCE_URL, sourceLicense:LISELI_SOURCE_LICENSE, importedBy:job.created_by, defaultStatus:"unverified" });
-        importedCount = Number(result.importedCount || 0);
-        skippedCount = Number(result.skippedCount || 0);
+      if (batch.length) {
+        const result = await db.bulkImportDictionary({
+          entries: batch,
+          sourceName: LISELI_SOURCE_NAME,
+          sourceUrl: LISELI_SOURCE_URL,
+          sourceLicense: LISELI_SOURCE_LICENSE,
+          importedBy: job.created_by,
+          defaultStatus: "unverified"
+        });
+
+        const processed = rowIndex;
+        const imported = Number(job.imported_count || 0) + Number(result.importedCount || 0);
+        const skipped = Number(job.skipped_count || 0) + Number(result.skippedCount || 0);
+
+        job = await updateLiseliJob(jobId, {
+          next_offset: processed,
+          processed_rows: processed,
+          imported_count: imported,
+          skipped_count: skipped
+        });
+
+        console.log("[LISELI_PROGRESS]", JSON.stringify({
+          jobId, processed, total: LISELI_TOTAL_ROWS, imported, skipped
+        }));
       }
 
-      const processed = Math.min(offset + rows.length, LISELI_TOTAL_ROWS);
-      await updateLiseliJob(jobId, { next_offset:processed, processed_rows:processed, imported_count:Number(job.imported_count || 0)+importedCount, skipped_count:Number(job.skipped_count || 0)+skippedCount });
-      if (rows.length < LISELI_PAGE_SIZE || processed >= LISELI_TOTAL_ROWS) {
+      if (rowIndex >= LISELI_TOTAL_ROWS || batch.length === 0) {
+        await updateLiseliJob(jobId, {
+          status:"completed",
+          next_offset:Math.min(rowIndex, LISELI_TOTAL_ROWS),
+          processed_rows:Math.min(rowIndex, LISELI_TOTAL_ROWS),
+          completed_at:new Date().toISOString()
+        });
         const latest = await getLiseliJob(jobId);
-        await updateLiseliJob(jobId, { status:"completed", next_offset:processed, processed_rows:processed, completed_at:new Date().toISOString() });
-        await db.logActivity("Liseli 7-language dictionary import #" + jobId + " completed: " + Number(latest && latest.imported_count || 0).toLocaleString() + " imported", "green");
+        await db.logActivity(
+          "Liseli 7-language dictionary import #" + jobId + " completed: " +
+          Number(latest && latest.imported_count || 0).toLocaleString() + " imported",
+          "green"
+        );
         break;
       }
-      await new Promise(resolve => setTimeout(resolve, 25));
+
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
   } catch (err) {
     console.error("[LISELI_IMPORT_FAILED]", err);
-    await updateLiseliJob(jobId, { status:"failed", error_message:String((err && err.message) || err).slice(0,1000) }).catch(() => {});
+    await updateLiseliJob(jobId, {
+      status:"failed",
+      error_message:String((err && err.message) || err).slice(0,1000)
+    }).catch(() => {});
   } finally {
+    if (reader) {
+      try { await reader.close(); } catch (_) {}
+    }
+    if (tempPath) {
+      try {
+        await fs.rm(path.dirname(tempPath), { recursive:true, force:true });
+      } catch (_) {}
+    }
     liseliWorkerRunning = false;
   }
 }
@@ -930,16 +1018,23 @@ async function runLiseliJob(jobId) {
 app.post("/admin/dictionary/import-liseli/start", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const { rows } = await db.pool.query("SELECT * FROM dictionary_import_jobs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1");
   if (rows[0]) return res.status(409).json({ error:"A Liseli import is already running.", job:rows[0] });
-  const { rows:created } = await db.pool.query("INSERT INTO dictionary_import_jobs (source_name,source_url,source_license,total_rows,created_by,status) VALUES ($1,$2,$3,$4,$5,'queued') RETURNING *", [LISELI_SOURCE_NAME,LISELI_SOURCE_URL,LISELI_SOURCE_LICENSE,LISELI_TOTAL_ROWS,req.user.id]);
+  const { rows:created } = await db.pool.query(
+    "INSERT INTO dictionary_import_jobs (source_name,source_url,source_license,total_rows,created_by,status) VALUES ($1,$2,$3,$4,$5,'queued') RETURNING *",
+    [LISELI_SOURCE_NAME,LISELI_SOURCE_URL,LISELI_SOURCE_LICENSE,LISELI_TOTAL_ROWS,req.user.id]
+  );
   const job = created[0];
-  await db.logActivity("Liseli 7-language dictionary import #" + job.id + " started by " + req.user.name, "sky");
+  await db.logActivity("Liseli 7-language Parquet import #" + job.id + " started by " + req.user.name, "sky");
   setImmediate(() => runLiseliJob(job.id));
   res.status(202).json({ success:true, job });
 }));
 
 app.get("/admin/dictionary/import-liseli/status", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const id = Number(req.query.id);
-  if (id) { const job = await getLiseliJob(id); if (!job) return res.status(404).json({ error:"Import job not found." }); return res.json({ job }); }
+  if (id) {
+    const job = await getLiseliJob(id);
+    if (!job) return res.status(404).json({ error:"Import job not found." });
+    return res.json({ job });
+  }
   const { rows } = await db.pool.query("SELECT * FROM dictionary_import_jobs ORDER BY id DESC LIMIT 1");
   res.json({ job:rows[0] || null });
 }));
