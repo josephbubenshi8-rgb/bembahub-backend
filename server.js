@@ -858,7 +858,7 @@ async function downloadLiseliDictionary() {
   // dictionary/entries.parquet. Read that real file directly from the dataset
   // instead of using Dataset Viewer conversion URLs, which are currently
   // returning 404s for this dataset.
-  const fileUrl = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli/resolve/main/dictionary/entries.parquet";
+  const fileUrl = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli/resolve/main/dictionary/entries.parquet?download=true";
   let lastError = null;
 
   for (let attempt = 1; attempt <= 5; attempt++) {
