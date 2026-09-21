@@ -813,6 +813,144 @@ app.get("/admin/translation-memory/stats", requireAuth, requireRole("admin"), as
 }));
 
 /* ══════════════════════════════════════════
+   RESUMABLE LISELI 7-LANGUAGE IMPORT
+   Processes Hugging Face /rows in 100-row pages and persists
+   progress so the import can resume after a restart.
+══════════════════════════════════════════ */
+const LISELI_DATASET = "GiJoeHansFranz/Liseli";
+const LISELI_API = "https://datasets-server.huggingface.co/rows";
+const LISELI_TOTAL_ROWS = 43010;
+const LISELI_PAGE_SIZE = 100;
+const LISELI_SOURCE_NAME = "Liseli — Zambian Language Dataset";
+const LISELI_SOURCE_URL = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli";
+const LISELI_SOURCE_LICENSE = "CC-BY-SA-4.0 — retain attribution and comply with upstream licenses.";
+const LISELI_LANG_MAP = { bemba:"bem", nyanja:"nya", tonga:"toi", lozi:"loz", luvale:"lue", lunda:"lun", kaonde:"kqn" };
+let liseliWorkerRunning = false;
+
+async function getLiseliJob(id) {
+  const { rows } = await db.pool.query("SELECT * FROM dictionary_import_jobs WHERE id=$1", [id]);
+  return rows[0] || null;
+}
+
+async function updateLiseliJob(id, patch) {
+  const allowed = ["status","next_offset","processed_rows","imported_count","skipped_count","error_message","started_at","completed_at"];
+  const keys = Object.keys(patch).filter(k => allowed.includes(k));
+  if (!keys.length) return getLiseliJob(id);
+  const values = keys.map(k => patch[k]);
+  const set = keys.map((k,i) => k + "=$" + (i+1)).join(", ");
+  values.push(id);
+  const { rows } = await db.pool.query("UPDATE dictionary_import_jobs SET " + set + ", updated_at=now() WHERE id=$" + values.length + " RETURNING *", values);
+  return rows[0] || null;
+}
+
+async function runLiseliJob(jobId) {
+  if (liseliWorkerRunning) return;
+  liseliWorkerRunning = true;
+  try {
+    let job = await getLiseliJob(jobId);
+    if (!job || ["completed","failed"].includes(job.status)) return;
+    await updateLiseliJob(jobId, { status:"running", started_at:job.started_at || new Date().toISOString(), error_message:null });
+
+    while (true) {
+      job = await getLiseliJob(jobId);
+      if (!job || ["completed","failed","paused"].includes(job.status)) break;
+      if (job.next_offset >= LISELI_TOTAL_ROWS) {
+        await updateLiseliJob(jobId, { status:"completed", next_offset:LISELI_TOTAL_ROWS, processed_rows:LISELI_TOTAL_ROWS, completed_at:new Date().toISOString() });
+        await db.logActivity("Liseli 7-language dictionary import #" + jobId + " completed", "green");
+        break;
+      }
+
+      const offset = job.next_offset;
+      const url = new URL(LISELI_API);
+      url.searchParams.set("dataset", LISELI_DATASET);
+      url.searchParams.set("config", "dictionary");
+      url.searchParams.set("split", "train");
+      url.searchParams.set("offset", String(offset));
+      url.searchParams.set("length", String(LISELI_PAGE_SIZE));
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Liseli API returned HTTP " + response.status);
+      const payload = await response.json();
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      if (!rows.length) {
+        await updateLiseliJob(jobId, { status:"completed", next_offset:LISELI_TOTAL_ROWS, processed_rows:LISELI_TOTAL_ROWS, completed_at:new Date().toISOString() });
+        break;
+      }
+
+      const entries = [];
+      for (const item of rows) {
+        const row = item && item.row ? item.row : {};
+        const target = LISELI_LANG_MAP[String(row.language || "").trim().toLowerCase()];
+        const english = String(row.english || "").trim();
+        const translation = String(row.translation || "").trim();
+        if (!target || !english || !translation) continue;
+        entries.push({ en:english, bm:translation, sourceLang:"eng", targetLang:target, cat:"General", contrib:"Liseli dataset", status:String(row.status || "").trim().toLowerCase() === "verified" ? "verified" : "unverified" });
+      }
+
+      let importedCount = 0, skippedCount = 0;
+      if (entries.length) {
+        const result = await db.bulkImportDictionary({ entries, sourceName:LISELI_SOURCE_NAME, sourceUrl:LISELI_SOURCE_URL, sourceLicense:LISELI_SOURCE_LICENSE, importedBy:job.created_by, defaultStatus:"unverified" });
+        importedCount = Number(result.importedCount || 0);
+        skippedCount = Number(result.skippedCount || 0);
+      }
+
+      const processed = Math.min(offset + rows.length, LISELI_TOTAL_ROWS);
+      await updateLiseliJob(jobId, { next_offset:processed, processed_rows:processed, imported_count:Number(job.imported_count || 0)+importedCount, skipped_count:Number(job.skipped_count || 0)+skippedCount });
+      if (rows.length < LISELI_PAGE_SIZE || processed >= LISELI_TOTAL_ROWS) {
+        const latest = await getLiseliJob(jobId);
+        await updateLiseliJob(jobId, { status:"completed", next_offset:processed, processed_rows:processed, completed_at:new Date().toISOString() });
+        await db.logActivity("Liseli 7-language dictionary import #" + jobId + " completed: " + Number(latest && latest.imported_count || 0).toLocaleString() + " imported", "green");
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  } catch (err) {
+    console.error("[LISELI_IMPORT_FAILED]", err);
+    await updateLiseliJob(jobId, { status:"failed", error_message:String((err && err.message) || err).slice(0,1000) }).catch(() => {});
+  } finally {
+    liseliWorkerRunning = false;
+  }
+}
+
+app.post("/admin/dictionary/import-liseli/start", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const { rows } = await db.pool.query("SELECT * FROM dictionary_import_jobs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1");
+  if (rows[0]) return res.status(409).json({ error:"A Liseli import is already running.", job:rows[0] });
+  const { rows:created } = await db.pool.query("INSERT INTO dictionary_import_jobs (source_name,source_url,source_license,total_rows,created_by,status) VALUES ($1,$2,$3,$4,$5,'queued') RETURNING *", [LISELI_SOURCE_NAME,LISELI_SOURCE_URL,LISELI_SOURCE_LICENSE,LISELI_TOTAL_ROWS,req.user.id]);
+  const job = created[0];
+  await db.logActivity("Liseli 7-language dictionary import #" + job.id + " started by " + req.user.name, "sky");
+  setImmediate(() => runLiseliJob(job.id));
+  res.status(202).json({ success:true, job });
+}));
+
+app.get("/admin/dictionary/import-liseli/status", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const id = Number(req.query.id);
+  if (id) { const job = await getLiseliJob(id); if (!job) return res.status(404).json({ error:"Import job not found." }); return res.json({ job }); }
+  const { rows } = await db.pool.query("SELECT * FROM dictionary_import_jobs ORDER BY id DESC LIMIT 1");
+  res.json({ job:rows[0] || null });
+}));
+
+app.post("/admin/dictionary/import-liseli/pause", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const id = Number(req.body && req.body.id);
+  const job = await getLiseliJob(id);
+  if (!job) return res.status(404).json({ error:"Import job not found." });
+  if (!["queued","running"].includes(job.status)) return res.status(400).json({ error:"Only a queued or running job can be paused." });
+  res.json({ success:true, job:await updateLiseliJob(id,{status:"paused"}) });
+}));
+
+app.post("/admin/dictionary/import-liseli/resume", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const id = Number(req.body && req.body.id);
+  const job = await getLiseliJob(id);
+  if (!job) return res.status(404).json({ error:"Import job not found." });
+  if (job.status !== "paused") return res.status(400).json({ error:"Only a paused job can be resumed." });
+  const updated = await updateLiseliJob(id,{status:"queued",error_message:null});
+  setImmediate(() => runLiseliJob(id));
+  res.json({ success:true, job:updated });
+}));
+
+async function resumeLiseliJobAfterStartup() {
+  const { rows } = await db.pool.query("SELECT id FROM dictionary_import_jobs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1");
+  if (rows[0]) setTimeout(() => runLiseliJob(rows[0].id), 1500);
+}
+/* ══════════════════════════════════════════
    404 + GLOBAL ERROR HANDLER + STARTUP
 ══════════════════════════════════════════ */
 app.use((req, res) => res.status(404).json({ error: "Not found." }));
