@@ -557,6 +557,21 @@ app.delete("/dictionary/candidates/:id", requireAuth, requireRole("admin"), asyn
    ADMIN DICTIONARY NAMESPACE — the primary admin dictionary-management API.
    Same underlying logic as /dictionary/candidates above.
 ══════════════════════════════════════════ */
+app.post("/admin/dictionary/import", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const { entries, sourceName, sourceUrl, sourceLicense, defaultStatus } = req.body || {};
+  if (!Array.isArray(entries) || !entries.length) return res.status(400).json({ error: "entries must be a non-empty array." });
+  if (entries.length > 5000) return res.status(400).json({ error: "A single import is limited to 5000 entries. Use multiple batches." });
+  if (!sourceName || !sourceLicense) return res.status(400).json({ error: "sourceName and sourceLicense are required." });
+
+  const result = await db.bulkImportDictionary({
+    entries, sourceName, sourceUrl, sourceLicense,
+    importedBy: req.user.id,
+    defaultStatus: defaultStatus === "verified" ? "verified" : "unverified",
+  });
+  await db.logActivity(`Dictionary import: ${result.importedCount} entries from "${sourceName}" by ${req.user.name}`, "sky");
+  res.status(201).json({ success: true, ...result });
+}));
+
 app.get("/admin/dictionary", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const { status, q, sourceLang, targetLang, sort } = req.query;
   res.json({ entries: await db.listDictionaryCandidates({ status, q, sourceLang, targetLang, sort }) });
