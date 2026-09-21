@@ -818,7 +818,7 @@ app.get("/admin/translation-memory/stats", requireAuth, requireRole("admin"), as
    Progress is persisted after every page so Render restarts resume.
 ══════════════════════════════════════════ */
 const LISELI_DATASET = "GiJoeHansFranz/Liseli";
-const LISELI_PARQUET_URL = "https://huggingface.co/datasets/GiJoeHansFranz/Liseli/resolve/main/dictionary/entries.parquet";
+const LISELI_PARQUET_API_URL = "https://huggingface.co/api/datasets/GiJoeHansFranz/Liseli/parquet/dictionary/train/0.parquet";
 const LISELI_TOTAL_ROWS = 43010;
 const LISELI_BATCH_SIZE = 250;
 const LISELI_SOURCE_NAME = "Liseli — Zambian Language Dataset";
@@ -857,9 +857,9 @@ async function downloadLiseliDictionary() {
   let lastError = null;
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
-      const response = await fetch(LISELI_PARQUET_URL, {
+      const response = await fetch(LISELI_PARQUET_API_URL, {
         headers: {
-          "User-Agent": "BembaHub-Liseli-Importer/2.0",
+          "User-Agent": "BembaHub-Liseli-Importer/2.1",
           "Accept": "application/octet-stream"
         },
         redirect: "follow",
@@ -873,9 +873,26 @@ async function downloadLiseliDictionary() {
         }
         break;
       }
+      const contentType = String(response.headers.get("content-type") || "").toLowerCase();
       const buffer = Buffer.from(await response.arrayBuffer());
-      if (!buffer.length) throw new Error("Hugging Face returned an empty dictionary file.");
-      console.log("[LISELI_FILE_READY]", JSON.stringify({ bytes: buffer.length }));
+
+      // A valid Parquet file starts with PAR1 and ends with PAR1.
+      // If Hugging Face returns JSON/HTML instead of the file, fail clearly.
+      const header = buffer.subarray(0, 4).toString("ascii");
+      const footer = buffer.subarray(Math.max(0, buffer.length - 4)).toString("ascii");
+      if (header !== "PAR1" || footer !== "PAR1") {
+        lastError = new Error(
+          "Hugging Face returned non-Parquet data (content-type " +
+          (contentType || "unknown") + ", size " + buffer.length + " bytes)."
+        );
+        if (attempt < 5) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 5000));
+          continue;
+        }
+        break;
+      }
+
+      console.log("[LISELI_FILE_READY]", JSON.stringify({ bytes: buffer.length, contentType }));
       return buffer;
     } catch (err) {
       lastError = err;
@@ -885,7 +902,6 @@ async function downloadLiseliDictionary() {
   }
   throw new Error("[liseli_file_fetch] " + (lastError?.message || "Hugging Face dictionary file request failed") + " after 5 attempts");
 }
-
 async function runLiseliJob(jobId) {
   if (liseliWorkerRunning) return;
   liseliWorkerRunning = true;
