@@ -857,69 +857,52 @@ async function downloadLiseliDictionary() {
   let lastError = null;
   for (let attempt = 1; attempt <= 5; attempt++) {
     try {
-      // First discover the real generated Parquet URL. Hugging Face publishes
-      // converted files under refs/convert/parquet, so we must not guess a
-      // filename or branch.
-      const discovery = await fetch(LISELI_PARQUET_DISCOVERY_URL, {
+      // Use Hugging Face's documented Hub API to get the ACTUAL Parquet URLs.
+      // This avoids guessing filenames such as 0000.parquet.
+      const listUrl = "https://huggingface.co/api/datasets/GiJoeHansFranz/Liseli/parquet/dictionary/train";
+      const discovery = await fetch(listUrl, {
         headers: {
-          "User-Agent": "BembaHub-Liseli-Importer/2.2",
+          "User-Agent": "BembaHub-Liseli-Importer/3.0",
           "Accept": "application/json"
         },
         signal: AbortSignal.timeout(30000),
       });
 
       if (!discovery.ok) {
-        throw new Error("Parquet discovery HTTP " + discovery.status);
+        throw new Error("Parquet URL discovery HTTP " + discovery.status);
       }
 
-      const data = await discovery.json();
-      const files = Array.isArray(data?.parquet_files) ? data.parquet_files : [];
-      const match = files.find((file) =>
-        String(file?.config || "").toLowerCase() === "dictionary" &&
-        String(file?.split || "").toLowerCase() === "train" &&
-        typeof file?.url === "string" &&
-        file.url
-      );
+      const urls = await discovery.json();
+      const candidates = Array.isArray(urls)
+        ? urls.filter((u) => typeof u === "string" && u)
+        : [];
 
-      if (!match) {
-        throw new Error(
-          "No dictionary/train Parquet file was returned by Hugging Face. " +
-          "pending=" + JSON.stringify(data?.pending || []) +
-          " failed=" + JSON.stringify(data?.failed || [])
-        );
+      if (!candidates.length) {
+        throw new Error("Hugging Face returned no dictionary/train Parquet URLs.");
       }
 
-      console.log("[LISELI_PARQUET_DISCOVERED]", JSON.stringify({
-        url: match.url,
-        filename: match.filename,
-        size: match.size
-      }));
-
-      // Prefer the URL returned by the viewer. If its generated redirect is
-      // stale (HF can briefly expose a listing before the converted file is
-      // reachable), fall back to the documented refs/convert/parquet path.
-      const candidateUrls = [
-        match.url,
-        "https://huggingface.co/datasets/GiJoeHansFranz/Liseli/resolve/refs%2Fconvert%2Fparquet/dictionary/train/0000.parquet"
-      ];
+      console.log("[LISELI_PARQUET_URLS]", JSON.stringify(candidates));
 
       let response = null;
       let lastDownloadError = null;
-      for (const fileUrl of candidateUrls) {
+
+      for (const fileUrl of candidates) {
         try {
           const candidate = await fetch(fileUrl, {
             headers: {
-              "User-Agent": "BembaHub-Liseli-Importer/2.3",
+              "User-Agent": "BembaHub-Liseli-Importer/3.0",
               "Accept": "application/octet-stream"
             },
             redirect: "follow",
             signal: AbortSignal.timeout(120000),
           });
+
           if (candidate.ok) {
             response = candidate;
             console.log("[LISELI_PARQUET_DOWNLOAD_OK]", fileUrl);
             break;
           }
+
           lastDownloadError = new Error("HTTP " + candidate.status + " for " + fileUrl);
           console.error("[LISELI_PARQUET_DOWNLOAD_ATTEMPT]", lastDownloadError.message);
         } catch (err) {
@@ -929,15 +912,18 @@ async function downloadLiseliDictionary() {
       }
 
       if (!response) {
-        throw new Error("Parquet download failed: " + (lastDownloadError?.message || "HTTP error"));
+        throw new Error(
+          "All discovered Parquet URLs failed: " +
+          (lastDownloadError?.message || "HTTP error")
+        );
       }
 
       const contentType = String(response.headers.get("content-type") || "").toLowerCase();
       const buffer = Buffer.from(await response.arrayBuffer());
 
-      // A valid Parquet file starts with PAR1 and ends with PAR1.
       const header = buffer.subarray(0, 4).toString("ascii");
       const footer = buffer.subarray(Math.max(0, buffer.length - 4)).toString("ascii");
+
       if (header !== "PAR1" || footer !== "PAR1") {
         throw new Error(
           "Hugging Face returned non-Parquet data (content-type " +
@@ -948,8 +934,9 @@ async function downloadLiseliDictionary() {
       console.log("[LISELI_FILE_READY]", JSON.stringify({
         bytes: buffer.length,
         contentType,
-        filename: match.filename
+        urlsFound: candidates.length
       }));
+
       return buffer;
     } catch (err) {
       lastError = err;
