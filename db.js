@@ -688,6 +688,25 @@ export async function clearChatMessages(userId) {
   await pool.query("DELETE FROM chat_messages WHERE user_id=$1", [userId]);
 }
 
+/* ─────────── TRANSLATION MEMORY ANALYTICS (admin) ─────────── */
+export async function translationMemoryStats() {
+  const { rows: stats } = await pool.query(
+    "SELECT saved_entries, total_reuses, language_pairs, last_updated_at FROM translation_memory_stats LIMIT 1"
+  );
+  const { rows: byPair } = await pool.query(
+    "SELECT source_lang, target_lang, saved_entries, total_reuses, last_used_at FROM translation_memory_by_pair ORDER BY saved_entries DESC, total_reuses DESC LIMIT 50"
+  );
+  const { rows: recent } = await pool.query(
+    `SELECT id, source_lang, target_lang, source_text, target_text, source, usage_count, created_at, last_used_at
+     FROM translation_memory ORDER BY last_used_at DESC LIMIT 20`
+  );
+  return {
+    summary: stats[0] || { saved_entries: 0, total_reuses: 0, language_pairs: 0, last_updated_at: null },
+    byLanguagePair: byPair,
+    recent,
+  };
+}
+
 /* ─────────── ANALYTICS (admin) ─────────── */
 export async function analyticsSummary() {
   const q = (sql) => pool.query(sql).then((r) => r.rows[0]);
