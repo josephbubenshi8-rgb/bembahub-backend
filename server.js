@@ -791,6 +791,10 @@ app.get("/analytics", requireAuth, requireRole("admin"), asyncRoute(async (req, 
   res.json(await db.analyticsSummary());
 }));
 
+app.get("/admin/translation-memory/stats", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  res.json(await db.translationMemoryStats());
+}));
+
 /* ══════════════════════════════════════════
    404 + GLOBAL ERROR HANDLER + STARTUP
 ══════════════════════════════════════════ */
