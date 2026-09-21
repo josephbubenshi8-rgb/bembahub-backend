@@ -867,8 +867,24 @@ async function runLiseliJob(jobId) {
       url.searchParams.set("split", "train");
       url.searchParams.set("offset", String(offset));
       url.searchParams.set("length", String(LISELI_PAGE_SIZE));
-      const response = await fetch(url);
-      if (!response.ok) throw new Error("Liseli API returned HTTP " + response.status);
+      let response;
+      let lastStatus = null;
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        try {
+          response = await fetch(url, {
+            headers: { "User-Agent": "BembaHub-Liseli-Importer/1.0" },
+            signal: AbortSignal.timeout(30000),
+          });
+          if (response.ok) break;
+          lastStatus = response.status;
+        } catch (fetchErr) {
+          lastStatus = fetchErr?.name === "TimeoutError" ? "timeout" : (fetchErr?.message || "network error");
+        }
+        if (attempt < 5) await new Promise(resolve => setTimeout(resolve, attempt * 3000));
+      }
+      if (!response || !response.ok) {
+        throw new Error("Liseli API returned HTTP " + String(lastStatus || "unknown") + " after 5 attempts");
+      }
       const payload = await response.json();
       const rows = Array.isArray(payload.rows) ? payload.rows : [];
       if (!rows.length) {
