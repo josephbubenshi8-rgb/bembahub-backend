@@ -373,6 +373,84 @@ export async function recalcConfidence(wordId) {
   return rows[0];
 }
 
+export async function bulkImportDictionary({ entries, sourceName, sourceUrl, sourceLicense, importedBy, defaultStatus = "unverified" }) {
+  if (!Array.isArray(entries) || !entries.length) throw new Error("entries must be a non-empty array");
+  if (!sourceName || !sourceName.trim()) throw new Error("sourceName is required");
+  if (!sourceLicense || !sourceLicense.trim()) throw new Error("sourceLicense is required");
+
+  const allowedStatus = new Set(["verified", "unverified"]);
+  const client = await pool.connect();
+  let importedCount = 0;
+  let skippedCount = 0;
+  let verifiedCount = 0;
+
+  try {
+    await client.query("BEGIN");
+
+    for (const raw of entries) {
+      const en = String(raw?.en ?? "").trim();
+      const bm = String(raw?.bm ?? "").trim();
+      const sourceLang = String(raw?.sourceLang ?? "eng").trim();
+      const targetLang = String(raw?.targetLang ?? "bem").trim();
+      if (!en || !bm || !isValidLang(sourceLang) || !isValidLang(targetLang) || sourceLang === targetLang) {
+        skippedCount++;
+        continue;
+      }
+
+      const status = allowedStatus.has(raw?.status) ? raw.status : defaultStatus;
+      const safeStatus = allowedStatus.has(status) ? status : "unverified";
+      const synonyms = Array.isArray(raw?.synonyms) ? raw.synonyms : [];
+      const antonyms = Array.isArray(raw?.antonyms) ? raw.antonyms : [];
+
+      const result = await client.query(
+        `INSERT INTO words
+          (en,bm,source_lang,target_lang,cat,pos,pron,ex,definition,synonyms,antonyms,contrib,status,source,source_name,source_url,source_license,usage_count,last_used_at,created_at,updated_at,confidence_score)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,0,NULL,now(),now(),$18)
+         ON CONFLICT (source_lang,target_lang,LOWER(TRIM(en)),LOWER(TRIM(bm)))
+         DO UPDATE SET
+           cat=CASE WHEN EXCLUDED.cat <> 'General' AND EXCLUDED.cat <> '' THEN EXCLUDED.cat ELSE words.cat END,
+           pos=CASE WHEN EXCLUDED.pos <> '' THEN EXCLUDED.pos ELSE words.pos END,
+           pron=CASE WHEN EXCLUDED.pron <> '' THEN EXCLUDED.pron ELSE words.pron END,
+           ex=CASE WHEN EXCLUDED.ex <> '' THEN EXCLUDED.ex ELSE words.ex END,
+           definition=CASE WHEN EXCLUDED.definition <> '' THEN EXCLUDED.definition ELSE words.definition END,
+           synonyms=CASE WHEN cardinality(EXCLUDED.synonyms) > 0 THEN EXCLUDED.synonyms ELSE words.synonyms END,
+           antonyms=CASE WHEN cardinality(EXCLUDED.antonyms) > 0 THEN EXCLUDED.antonyms ELSE words.antonyms END,
+           source_name=EXCLUDED.source_name,
+           source_url=EXCLUDED.source_url,
+           source_license=EXCLUDED.source_license,
+           contrib=EXCLUDED.contrib,
+           status=CASE WHEN EXCLUDED.status='verified' THEN 'verified' ELSE words.status END,
+           confidence_score=CASE WHEN EXCLUDED.status='verified' THEN 100 ELSE words.confidence_score END,
+           updated_at=now()
+         RETURNING status`,
+        [
+          en,bm,sourceLang,targetLang,raw?.cat || "General",raw?.pos || "",raw?.pron || "",
+          raw?.ex || "",raw?.definition || "",synonyms,antonyms,raw?.contrib || sourceName,
+          safeStatus,raw?.source || "import",sourceName,sourceUrl || "",sourceLicense,
+          safeStatus === "verified" ? 100 : 0
+        ]
+      );
+      importedCount++;
+      if (result.rows[0]?.status === "verified") verifiedCount++;
+    }
+
+    await client.query(
+      `INSERT INTO dictionary_imports
+        (source_name,source_url,source_license,source_lang,target_lang,imported_count,skipped_count,verified_count,created_by)
+       VALUES ($1,$2,$3,'mixed','mixed',$4,$5,$6,$7)`,
+      [sourceName.trim(),sourceUrl || "",sourceLicense.trim(),importedCount,skippedCount,verifiedCount,importedBy || null]
+    );
+
+    await client.query("COMMIT");
+    return { importedCount, skippedCount, verifiedCount };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function insertApprovedWord(w) {
   const { rows } = await pool.query(
     `INSERT INTO words (en,bm,source_lang,target_lang,cat,pos,pron,ex,definition,synonyms,antonyms,contrib,status,source,usage_count,last_used_at,created_at,updated_at,confidence_score)
