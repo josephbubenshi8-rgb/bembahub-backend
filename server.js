@@ -895,17 +895,41 @@ async function downloadLiseliDictionary() {
         size: match.size
       }));
 
-      const response = await fetch(match.url, {
-        headers: {
-          "User-Agent": "BembaHub-Liseli-Importer/2.2",
-          "Accept": "application/octet-stream"
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(120000),
-      });
+      // Prefer the URL returned by the viewer. If its generated redirect is
+      // stale (HF can briefly expose a listing before the converted file is
+      // reachable), fall back to the documented refs/convert/parquet path.
+      const candidateUrls = [
+        match.url,
+        "https://huggingface.co/datasets/GiJoeHansFranz/Liseli/resolve/refs%2Fconvert%2Fparquet/dictionary/train/0000.parquet"
+      ];
 
-      if (!response.ok) {
-        throw new Error("Parquet download HTTP " + response.status);
+      let response = null;
+      let lastDownloadError = null;
+      for (const fileUrl of candidateUrls) {
+        try {
+          const candidate = await fetch(fileUrl, {
+            headers: {
+              "User-Agent": "BembaHub-Liseli-Importer/2.3",
+              "Accept": "application/octet-stream"
+            },
+            redirect: "follow",
+            signal: AbortSignal.timeout(120000),
+          });
+          if (candidate.ok) {
+            response = candidate;
+            console.log("[LISELI_PARQUET_DOWNLOAD_OK]", fileUrl);
+            break;
+          }
+          lastDownloadError = new Error("HTTP " + candidate.status + " for " + fileUrl);
+          console.error("[LISELI_PARQUET_DOWNLOAD_ATTEMPT]", lastDownloadError.message);
+        } catch (err) {
+          lastDownloadError = err;
+          console.error("[LISELI_PARQUET_DOWNLOAD_ATTEMPT]", err?.message || err);
+        }
+      }
+
+      if (!response) {
+        throw new Error("Parquet download failed: " + (lastDownloadError?.message || "HTTP error"));
       }
 
       const contentType = String(response.headers.get("content-type") || "").toLowerCase();
