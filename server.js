@@ -1,6 +1,7 @@
 import express from "express";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import cors from "cors";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
@@ -1121,6 +1122,19 @@ db.initSchema()
   .then(() => {
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
     resumeLiseliJobAfterStartup().catch((err) => console.error("[LISELI_RESUME]", err));
+
+    // Start the local Liseli pack import in a separate process so Render can
+    // detect the web server immediately instead of waiting for the dictionary
+    // import to finish. The importer uses its own database pool.
+    const importer = spawn(process.execPath, ["liseli-local-import.js"], {
+      cwd: process.cwd(),
+      stdio: "inherit",
+      env: process.env,
+    });
+    importer.on("error", (err) => console.error("[LISELI_LOCAL_IMPORTER]", err));
+    importer.on("exit", (code, signal) => {
+      console.log("[LISELI_LOCAL_IMPORTER_EXIT]", JSON.stringify({ code, signal }));
+    });
   })
   .catch((err) => {
     console.error("Failed to initialize database schema:", err);
