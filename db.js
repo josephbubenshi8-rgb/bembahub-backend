@@ -405,7 +405,7 @@ export async function bulkImportDictionary({ entries, sourceName, sourceUrl, sou
       const result = await client.query(
         `INSERT INTO words
           (en,bm,source_lang,target_lang,cat,pos,pron,ex,definition,synonyms,antonyms,contrib,status,source,source_name,source_url,source_license,usage_count,last_used_at,created_at,updated_at,confidence_score)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,0,NULL,now(),now(),$18)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,0,now(),now(),now(),$18)
          ON CONFLICT (source_lang,target_lang,LOWER(TRIM(en)),LOWER(TRIM(bm)))
          DO UPDATE SET
            cat=CASE WHEN EXCLUDED.cat <> 'General' AND EXCLUDED.cat <> '' THEN EXCLUDED.cat ELSE words.cat END,
