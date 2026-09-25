@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import * as db from "./db.js";
+import { startMt560Job, getMt560Job } from "./mt560-importer.js";
 
 const FILE = "data/dictionary/liseli-7-language.jsonl";
 const SOURCE_NAME = "Liseli — Zambian Language Dataset";
@@ -121,6 +122,23 @@ async function main() {
       imported,
       skipped,
     }));
+
+    // After Liseli is ready, enrich BembaHub with the open CC-BY-4.0
+    // English-Bemba MT560 parallel corpus. This is stored primarily as
+    // translation memory; only clean single-word pairs are promoted into
+    // the word dictionary. The persisted job prevents duplicate imports.
+    const mt560 = await startMt560Job(null);
+    console.log("[MT560_LOCAL_START]", JSON.stringify(mt560.job));
+    if (!mt560.alreadyCompleted) {
+      while (true) {
+        const current = await getMt560Job(mt560.job.id);
+        if (!current || ["completed", "failed"].includes(current.status)) {
+          console.log("[MT560_LOCAL_END]", JSON.stringify(current));
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
   } finally {
     rl.close();
     await db.pool.end();
