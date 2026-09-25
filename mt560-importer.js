@@ -62,8 +62,10 @@ export async function runMt560Job(id){
  finally{try{if(reader)await reader.close();}catch(_){}running=false;}
 }
 export async function startMt560Job(createdBy){
- const {rows}=await db.pool.query("SELECT * FROM translation_memory_import_jobs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1");
- if(rows[0])return {conflict:true,job:rows[0]};
+ const {rows:active}=await db.pool.query("SELECT * FROM translation_memory_import_jobs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1");
+ if(active[0])return {conflict:true,job:active[0]};
+ const {rows:done}=await db.pool.query("SELECT * FROM translation_memory_import_jobs WHERE status='completed' ORDER BY id DESC LIMIT 1");
+ if(done[0])return {alreadyCompleted:true,conflict:false,job:done[0]};
  const {rows:created}=await db.pool.query("INSERT INTO translation_memory_import_jobs (source_name,source_url,source_license,dataset,split,total_rows,created_by,status) VALUES ($1,$2,$3,$4,'train',$5,$6,'queued') RETURNING *",["OPUS MT560 English-Bemba Parallel Dataset",MT560_SOURCE_URL,MT560_SOURCE_LICENSE,MT560_DATASET,MT560_TOTAL_ROWS,createdBy]);
  const j=created[0];setImmediate(()=>runMt560Job(j.id));return {conflict:false,job:j};
 }
