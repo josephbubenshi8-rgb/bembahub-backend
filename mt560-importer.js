@@ -29,37 +29,46 @@ async function insertMemory(items){
 }
 let running=false;
 export async function runMt560Job(id){
- if(running)return; running=true; let reader=null;
- try{
-  let j=await job(id); if(!j||["completed","failed"].includes(j.status))return;
-  await patch(id,{status:"running",started_at:j.started_at||new Date().toISOString(),error_message:null});
-  const p=await import("parquetjs-lite"); const Reader=p.default?.ParquetReader||p.ParquetReader;
-  if(!Reader?.openBuffer)throw new Error("parquetjs-lite openBuffer() is unavailable.");
-  reader=await Reader.openBuffer(await download()); const c=reader.getCursor();
-  let i=0,mem=Number(j.memory_imported_count||0),dict=Number(j.dictionary_imported_count||0),skip=Number(j.skipped_count||0);
-  const resume=Number(j.next_offset||0); let mb=[],dbatch=[];
-  while(true){
-   j=await job(id); if(!j||["completed","failed","paused"].includes(j.status))break;
-   const row=await c.next(); if(!row)break; i++; if(i<=resume)continue;
-   const en=clean(row.eng),bm=clean(row.bem); if(!en||!bm||en===bm){skip++;continue;}
-   mb.push({s:en,t:bm,k:en.toLowerCase()});
-   if(en.length<=60&&bm.length<=60&&/^[\p{L}][\p{L}'’\-]*$/u.test(en)&&/^[\p{L}][\p{L}'’\-]*$/u.test(bm))dbatch.push({en,bm,sourceLang:"eng",targetLang:"bem",cat:"MT560",pos:"word",contrib:"OPUS MT560 / Bemba",status:"unverified"});
-   if(mb.length>=500){
-    mem+=await insertMemory(mb);
-    if(dbatch.length){const r=await db.bulkImportDictionary({entries:dbatch,sourceName:"OPUS MT560 English-Bemba Parallel Dataset",sourceUrl:MT560_SOURCE_URL,sourceLicense:MT560_SOURCE_LICENSE,importedBy:j.created_by,defaultStatus:"unverified"});dict+=Number(r.importedCount||0);skip+=Number(r.skippedCount||0);}
-    await patch(id,{next_offset:i,processed_rows:i,memory_imported_count:mem,dictionary_imported_count:dict,skipped_count:skip});
-    console.log("[MT560_PROGRESS]",JSON.stringify({id,processed:i,total:MT560_TOTAL_ROWS,mem,dict,skip})); mb=[];dbatch=[];
-   }
-  }
-  j=await job(id);
-  if(j&&j.status!=="paused"){
-   mem+=await insertMemory(mb);
-   if(dbatch.length){const r=await db.bulkImportDictionary({entries:dbatch,sourceName:"OPUS MT560 English-Bemba Parallel Dataset",sourceUrl:MT560_SOURCE_URL,sourceLicense:MT560_SOURCE_LICENSE,importedBy:j.created_by,defaultStatus:"unverified"});dict+=Number(r.importedCount||0);skip+=Number(r.skippedCount||0);}
-   await patch(id,{status:"completed",next_offset:Math.min(i,MT560_TOTAL_ROWS),processed_rows:Math.min(i,MT560_TOTAL_ROWS),memory_imported_count:mem,dictionary_imported_count:dict,skipped_count:skip,completed_at:new Date().toISOString()});
-   await db.logActivity("MT560 English-Bemba import #"+id+" completed: "+mem.toLocaleString()+" translation pairs saved","green");
-  }
- }catch(e){console.error("[MT560_IMPORT_FAILED]",e);await patch(id,{status:"failed",error_message:String(e?.message||e).slice(0,1000)}).catch(()=>{});}
- finally{try{if(reader)await reader.close();}catch(_){}running=false;}
+  if(running)return; running=true;
+  try{
+    let j=await getJob(id);
+    if(!j||["completed","failed"].includes(j.status))return;
+    await patch(id,{status:"running",started_at:j.started_at||new Date().toISOString(),error_message:null});
+    const {asyncBufferFromUrl,parquetReadObjects}=await import("hyparquet");
+    const file=await asyncBufferFromUrl({url:MT560_FILE_URL,requestInit:{headers:{"User-Agent":"BembaHub-MT560-Importer/1.0"}}});
+    let offset=Number(j.next_offset||0), mem=Number(j.memory_imported_count||0), dict=Number(j.dictionary_imported_count||0), skip=Number(j.skipped_count||0);
+    while(offset<MT560_TOTAL_ROWS){
+      j=await getJob(id);
+      if(!j||["completed","failed","paused"].includes(j.status))break;
+      const end=Math.min(offset+MT560_BATCH_SIZE,MT560_TOTAL_ROWS);
+      const rows=await parquetReadObjects({file,columns:["eng","bem"],rowStart:offset,rowEnd:end});
+      const mb=[],dbatch=[];
+      for(const row of rows){
+        const en=clean(row.eng),bm=clean(row.bem);
+        if(!en||!bm||en===bm){skip++;continue;}
+        mb.push({s:en,t:bm,k:en.toLowerCase()});
+        if(en.length<=60&&bm.length<=60&&/^[\p{L}][\p{L}'’\-]*$/u.test(en)&&/^[\p{L}][\p{L}'’\-]*$/u.test(bm)){
+          dbatch.push({en,bm,sourceLang:"eng",targetLang:"bem",cat:"MT560",pos:"word",contrib:"OPUS MT560 / Bemba",status:"unverified"});
+        }
+      }
+      mem+=await insertMemory(mb);
+      if(dbatch.length){
+        const res=await db.bulkImportDictionary({entries:dbatch,sourceName:"OPUS MT560 English-Bemba Parallel Dataset",sourceUrl:MT560_SOURCE_URL,sourceLicense:MT560_SOURCE_LICENSE,importedBy:j.created_by,defaultStatus:"unverified"});
+        dict+=Number(res.importedCount||0); skip+=Number(res.skippedCount||0);
+      }
+      offset=end;
+      await patch(id,{next_offset:offset,processed_rows:offset,memory_imported_count:mem,dictionary_imported_count:dict,skipped_count:skip});
+      console.log("[MT560_PROGRESS]",JSON.stringify({id,processed:offset,total:MT560_TOTAL_ROWS,memoryImported:mem,dictionaryImported:dict,skipped:skip}));
+    }
+    j=await getJob(id);
+    if(j&&j.status!=="paused"&&offset>=MT560_TOTAL_ROWS){
+      await patch(id,{status:"completed",next_offset:MT560_TOTAL_ROWS,processed_rows:MT560_TOTAL_ROWS,memory_imported_count:mem,dictionary_imported_count:dict,skipped_count:skip,completed_at:new Date().toISOString()});
+      await db.logActivity("MT560 English-Bemba import #"+id+" completed: "+mem.toLocaleString()+" translation pairs saved","green");
+    }
+  }catch(e){
+    console.error("[MT560_IMPORT_FAILED]",e);
+    await patch(id,{status:"failed",error_message:String(e?.message||e).slice(0,1000)}).catch(()=>{});
+  }finally{running=false;}
 }
 export async function startMt560Job(createdBy){
  const {rows:active}=await db.pool.query("SELECT * FROM translation_memory_import_jobs WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1");
