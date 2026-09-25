@@ -27,16 +27,34 @@ async function alreadyImported() {
   return Number(rows[0]?.total || 0) >= EXPECTED_ROWS;
 }
 
+async function runMt560Enrichment() {
+  const mt560 = await startMt560Job(null);
+  console.log("[MT560_LOCAL_START]", JSON.stringify(mt560.job));
+  if (!mt560.alreadyCompleted) {
+    while (true) {
+      const current = await getMt560Job(mt560.job.id);
+      if (!current || ["completed", "failed"].includes(current.status)) {
+        console.log("[MT560_LOCAL_END]", JSON.stringify(current));
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
+
 async function main() {
   if (!fs.existsSync(FILE)) {
-    console.log("[LISELI_LOCAL] No generated Liseli pack yet; skipping.");
+    console.log("[LISELI_LOCAL] No generated Liseli pack yet; skipping Liseli.");
+    await db.initSchema();
+    await runMt560Enrichment();
     return;
   }
 
   await db.initSchema();
 
   if (await alreadyImported()) {
-    console.log("[LISELI_LOCAL] Dictionary pack already imported; skipping.");
+    console.log("[LISELI_LOCAL] Dictionary pack already imported; skipping Liseli.");
+    await runMt560Enrichment();
     return;
   }
 
@@ -123,22 +141,7 @@ async function main() {
       skipped,
     }));
 
-    // After Liseli is ready, enrich BembaHub with the open CC-BY-4.0
-    // English-Bemba MT560 parallel corpus. This is stored primarily as
-    // translation memory; only clean single-word pairs are promoted into
-    // the word dictionary. The persisted job prevents duplicate imports.
-    const mt560 = await startMt560Job(null);
-    console.log("[MT560_LOCAL_START]", JSON.stringify(mt560.job));
-    if (!mt560.alreadyCompleted) {
-      while (true) {
-        const current = await getMt560Job(mt560.job.id);
-        if (!current || ["completed", "failed"].includes(current.status)) {
-          console.log("[MT560_LOCAL_END]", JSON.stringify(current));
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-      }
-    }
+    await runMt560Enrichment();
   } finally {
     rl.close();
     await db.pool.end();
