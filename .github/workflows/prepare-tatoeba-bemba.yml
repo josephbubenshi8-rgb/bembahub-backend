@@ -25,7 +25,7 @@ jobs:
           cd /tmp/tatoeba
           curl -fL --retry 5 --retry-delay 2 \
             -o bem-eng.txt.zip \
-            https://object.pouta.csc.fi/OPUS-Tatoeba/v2023-09-26/moses/bem-eng.txt.zip
+            https://object.pouta.csc.fi/OPUS-Tatoeba/v2026-07-08/moses/bem-eng.txt.zip
           unzip -o bem-eng.txt.zip
           ls -lh
           BEM_FILE="$(find . -maxdepth 1 -type f -name '*bem' | head -n 1)"
