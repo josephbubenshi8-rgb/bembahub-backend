@@ -3,6 +3,7 @@ import readline from "node:readline";
 import * as db from "./db.js";
 import { startMt560Job, getMt560Job } from "./mt560-importer.js";
 import { runTatoebaDictionaryImport } from "./tatoeba-dictionary-importer.js";
+import { runPanlexDictionaryImport } from "./panlex-dictionary-importer.js";
 
 const FILE = "data/dictionary/liseli-7-language.jsonl";
 const SOURCE_NAME = "Liseli — Zambian Language Dataset";
@@ -43,21 +44,20 @@ async function runMt560Enrichment() {
   }
 }
 
-async function main() {
+async function runLocalEnrichment() {
+  await runMt560Enrichment();
+  await runTatoebaDictionaryImport();
+  await runPanlexDictionaryImport();
+}
+
+async function importLiseliIfNeeded() {
   if (!fs.existsSync(FILE)) {
     console.log("[LISELI_LOCAL] No generated Liseli pack yet; skipping Liseli.");
-    await db.initSchema();
-    await runMt560Enrichment();
-    await runTatoebaDictionaryImport();
     return;
   }
 
-  await db.initSchema();
-
   if (await alreadyImported()) {
     console.log("[LISELI_LOCAL] Dictionary pack already imported; skipping Liseli.");
-    await runMt560Enrichment();
-    await runTatoebaDictionaryImport();
     return;
   }
 
@@ -143,17 +143,21 @@ async function main() {
       imported,
       skipped,
     }));
-
-    await runMt560Enrichment();
-    await runTatoebaDictionaryImport();
   } finally {
     rl.close();
-    await db.pool.end();
   }
+}
+
+async function main() {
+  await db.initSchema();
+  await importLiseliIfNeeded();
+  await runLocalEnrichment();
 }
 
 main().catch(async (err) => {
   console.error("[LISELI_LOCAL_FAILED]", err);
   try { await db.pool.end(); } catch (_) {}
   process.exit(1);
+}).finally(async () => {
+  try { await db.pool.end(); } catch (_) {}
 });
