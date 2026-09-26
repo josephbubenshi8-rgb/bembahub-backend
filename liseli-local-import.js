@@ -2,6 +2,7 @@ import fs from "node:fs";
 import readline from "node:readline";
 import * as db from "./db.js";
 import { startMt560Job, getMt560Job } from "./mt560-importer.js";
+import { runTatoebaDictionaryImport } from "./tatoeba-dictionary-importer.js";
 
 const FILE = "data/dictionary/liseli-7-language.jsonl";
 const SOURCE_NAME = "Liseli — Zambian Language Dataset";
@@ -47,6 +48,7 @@ async function main() {
     console.log("[LISELI_LOCAL] No generated Liseli pack yet; skipping Liseli.");
     await db.initSchema();
     await runMt560Enrichment();
+    await runTatoebaDictionaryImport();
     return;
   }
 
@@ -55,6 +57,7 @@ async function main() {
   if (await alreadyImported()) {
     console.log("[LISELI_LOCAL] Dictionary pack already imported; skipping Liseli.");
     await runMt560Enrichment();
+    await runTatoebaDictionaryImport();
     return;
   }
 
@@ -142,6 +145,7 @@ async function main() {
     }));
 
     await runMt560Enrichment();
+    await runTatoebaDictionaryImport();
   } finally {
     rl.close();
     await db.pool.end();
