@@ -20,101 +20,52 @@ jobs:
 
       - name: Build single-word English-Bemba dictionary pack
         run: |
-          mkdir -p data/dictionary
+          set -euo pipefail
+          mkdir -p data/dictionary /tmp/tatoeba
+          cd /tmp/tatoeba
+          curl -fL --retry 5 --retry-delay 2 \
+            -o bem-eng.txt.zip \
+            https://object.pouta.csc.fi/OPUS-Tatoeba/v2023-09-26/moses/bem-eng.txt.zip
+          unzip -o bem-eng.txt.zip
+          ls -lh
+          BEM_FILE="$(find . -maxdepth 1 -type f -name '*bem' | head -n 1)"
+          ENG_FILE="$(find . -maxdepth 1 -type f -name '*eng' | head -n 1)"
+          if [ -z "$BEM_FILE" ] || [ -z "$ENG_FILE" ]; then
+            echo "Could not find aligned .bem and .eng files in the OPUS archive"
+            exit 1
+          fi
+          echo "Bemba file: $BEM_FILE"
+          echo "English file: $ENG_FILE"
           python <<'PY'
-          import bz2, csv, io, json, re, tarfile, urllib.request
+          import json, re
           from pathlib import Path
-
-          BASE = "https://downloads.tatoeba.org/exports/per_language"
-          URLS = {
-              "bem": f"{BASE}/bem/bem_sentences.tsv.bz2",
-              "eng": f"{BASE}/eng/eng_sentences.tsv.bz2",
-              "links": "https://downloads.tatoeba.org/exports/links.tar.bz2",
-          }
-
           root = Path("/tmp/tatoeba")
-          root.mkdir(parents=True, exist_ok=True)
-
-          def download(url, path):
-              print("Downloading", url)
-              urllib.request.urlretrieve(url, path)
-              print("Bytes:", path.stat().st_size)
-
-          bem_file = root / "bem.tsv.bz2"
-          eng_file = root / "eng.tsv.bz2"
-          links_file = root / "links.tar.bz2"
-          download(URLS["bem"], bem_file)
-          download(URLS["eng"], eng_file)
-          download(URLS["links"], links_file)
-
-          def load_sentences(path):
-              out = {}
-              with bz2.open(path, "rt", encoding="utf-8") as f:
-                  for row in csv.reader(f, delimiter="\t"):
-                      if len(row) >= 3:
-                          out[row[0]] = row[2].strip()
-              return out
-
-          print("Loading Bemba sentences...")
-          bem = load_sentences(bem_file)
-          print("Bemba sentences:", len(bem))
-          print("Loading English sentences...")
-          eng = load_sentences(eng_file)
-          print("English sentences:", len(eng))
-
-          link_name = None
-          with tarfile.open(links_file, "r:bz2") as tar:
-              for m in tar.getmembers():
-                  if m.isfile() and (m.name.endswith("links.csv") or m.name.endswith("links.tsv")):
-                      link_name = m.name
-                      extracted = tar.extractfile(m)
-                      break
-              if not link_name or extracted is None:
-                  raise RuntimeError("Could not find links.csv/links.tsv in links.tar.bz2")
-
-              pairs = []
-              for raw in io.TextIOWrapper(extracted, encoding="utf-8", newline=""):
-                  parts = raw.rstrip("\n").split("\t")
-                  if len(parts) < 2:
-                      continue
-                  pairs.append((parts[0], parts[1]))
-
-          word_re = re.compile(r"^[\p{L}][\p{L}'’\-]*$".replace("\\p{L}", "A-Za-zÀ-ÖØ-öø-ÿ"))
+          bem_file = next(root.glob("*bem"))
+          eng_file = next(root.glob("*eng"))
           def one_word(s):
-              s = " ".join(s.split())
+              s = " ".join(s.strip().split())
               return bool(re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿĀ-ž'’\-]+", s))
-
           seen = set()
           rows = []
-          for a, b in pairs:
-              ta = bem.get(a)
-              tb = eng.get(b)
-              if ta is None or tb is None:
-                  ta = bem.get(b)
-                  tb = eng.get(a)
-              if not ta or not tb:
-                  continue
-              bm = " ".join(ta.split())
-              en = " ".join(tb.split())
-              if not one_word(bm) or not one_word(en):
-                  continue
-              key = (en.casefold(), bm.casefold())
-              if key in seen:
-                  continue
-              seen.add(key)
-              rows.append({
-                  "eng": en,
-                  "bem": bm,
-                  "source": "Tatoeba",
-                  "license": "CC-BY-2.0-FR"
-              })
-
+          with bem_file.open("r", encoding="utf-8") as bf, eng_file.open("r", encoding="utf-8") as ef:
+              for bem_raw, eng_raw in zip(bf, ef):
+                  bm = " ".join(bem_raw.strip().split())
+                  en = " ".join(eng_raw.strip().split())
+                  if not bm or not en:
+                      continue
+                  if not one_word(bm) or not one_word(en):
+                      continue
+                  key = (en.casefold(), bm.casefold())
+                  if key in seen:
+                      continue
+                  seen.add(key)
+                  rows.append({"eng": en, "bem": bm, "source": "Tatoeba", "license": "CC-BY-2.0-FR"})
           rows.sort(key=lambda x: (x["eng"].casefold(), x["bem"].casefold()))
-          out = Path("data/dictionary/tatoeba-english-bemba-words.jsonl")
+          out = Path("/home/runner/work/bembahub-backend/bembahub-backend/data/dictionary/tatoeba-english-bemba-words.jsonl")
+          out.parent.mkdir(parents=True, exist_ok=True)
           with out.open("w", encoding="utf-8") as f:
               for row in rows:
                   f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
           print("Dictionary word pairs written:", len(rows))
           print("Output bytes:", out.stat().st_size)
           if len(rows) == 0:
@@ -127,19 +78,21 @@ jobs:
           # Tatoeba English-Bemba Dictionary Attribution
 
           Source: Tatoeba
-          Source URL: https://tatoeba.org/
-          Data downloads: https://tatoeba.org/en/downloads
-          License: CC BY 2.0 FR for textual sentence data by default; attribution required.
-          
-          BembaHub uses only aligned single-word English-Bemba pairs extracted from the
-          Tatoeba sentence/link exports. The generated pack is a derived selection, not
-          a copy of the complete Tatoeba corpus.
-          
-          Required attribution: "Tatoeba.org and its contributors", used under CC BY 2.0 FR.
+          Tatoeba project: https://tatoeba.org/
+          OPUS/Tatoeba release: https://github.com/Helsinki-NLP/Tatoeba-Challenge
+          License: CC BY 2.0 FR for the Tatoeba textual data; attribution required.
+
+          BembaHub uses only aligned single-word English-Bemba pairs selected from
+          the Tatoeba English-Bemba parallel corpus. The generated pack is a
+          derived selection, not a copy of the complete Tatoeba corpus.
+
+          Required attribution: "Tatoeba.org and its contributors", used under
+          CC BY 2.0 FR.
           EOF
 
       - name: Commit generated Tatoeba dictionary pack
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/dictionary/tatoeba-english-bemba-words.jsonl data/dictionary/TATOEBA-BEMBA-ATTRIBUTION.md
