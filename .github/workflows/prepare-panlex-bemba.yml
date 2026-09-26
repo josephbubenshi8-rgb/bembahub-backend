@@ -1,0 +1,133 @@
+name: Prepare PanLex English-Bemba Dictionary Pack
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/prepare-panlex-bemba.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-panlex-bemba:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout BembaHub backend
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build PanLex English-Bemba dictionary pack
+        run: |
+          set -euo pipefail
+          mkdir -p data/dictionary /tmp/panlex
+          cd /tmp/panlex
+
+          curl -fL --retry 5 --retry-delay 2 -o bem.tsv             https://huggingface.co/datasets/cointegrated/panlex-meanings/resolve/main/data/bem.tsv?download=true
+          curl -fL --retry 5 --retry-delay 2 -o eng.tsv             https://huggingface.co/datasets/cointegrated/panlex-meanings/resolve/main/data/eng.tsv?download=true
+
+          ls -lh bem.tsv eng.tsv
+
+          python <<'PY'
+          import csv, json, re, sqlite3
+          from pathlib import Path
+
+          root = Path("/tmp/panlex")
+          db_path = root / "join.sqlite"
+          conn = sqlite3.connect(db_path)
+          cur = conn.cursor()
+          cur.execute("PRAGMA journal_mode=OFF")
+          cur.execute("PRAGMA synchronous=OFF")
+          cur.execute("CREATE TABLE eng (meaning INTEGER, txt TEXT)")
+          cur.execute("CREATE INDEX idx_eng_meaning ON eng(meaning)")
+
+          with (root / "eng.tsv").open("r", encoding="utf-8", newline="") as f:
+              reader = csv.DictReader(f, delimiter="\t")
+              batch = []
+              for row in reader:
+                  txt = (row.get("txt") or "").strip()
+                  meaning = (row.get("meaning") or "").strip()
+                  if not txt or not meaning or not meaning.isdigit():
+                      continue
+                  batch.append((int(meaning), txt))
+                  if len(batch) >= 20000:
+                      cur.executemany("INSERT INTO eng VALUES (?,?)", batch)
+                      conn.commit()
+                      batch.clear()
+              if batch:
+                  cur.executemany("INSERT INTO eng VALUES (?,?)", batch)
+                  conn.commit()
+
+          out = Path("/home/runner/work/bembahub-backend/bembahub-backend/data/dictionary/panlex-english-bemba-words.jsonl")
+          out.parent.mkdir(parents=True, exist_ok=True)
+
+          def one_word(s):
+              s = " ".join(s.strip().split())
+              return bool(re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿĀ-ž'’\-]+", s))
+
+          seen = set()
+          count = 0
+
+          with (root / "bem.tsv").open("r", encoding="utf-8", newline="") as bf, out.open("w", encoding="utf-8") as of:
+              reader = csv.DictReader(bf, delimiter="\t")
+              for row in reader:
+                  bm = " ".join((row.get("txt") or "").strip().split())
+                  meaning = (row.get("meaning") or "").strip()
+                  if not bm or not meaning or not meaning.isdigit() or not one_word(bm):
+                      continue
+
+                  for (en,) in cur.execute("SELECT txt FROM eng WHERE meaning=?", (int(meaning),)):
+                      en = " ".join(en.strip().split())
+                      if not en or not one_word(en):
+                          continue
+                      key = (en.casefold(), bm.casefold())
+                      if key in seen:
+                          continue
+                      seen.add(key)
+                      of.write(json.dumps({
+                          "eng": en,
+                          "bem": bm,
+                          "source": "PanLex",
+                          "license": "CC0-1.0"
+                      }, ensure_ascii=False) + "\n")
+                      count += 1
+
+          conn.close()
+          print("PanLex single-word pairs written:", count)
+          print("Output bytes:", out.stat().st_size)
+          if count == 0:
+              raise RuntimeError("No PanLex English-Bemba single-word pairs were extracted")
+          PY
+
+      - name: Add PanLex attribution
+        run: |
+          cat > data/dictionary/PANLEX-BEMBA-ATTRIBUTION.md <<'EOF'
+          # PanLex English-Bemba Dictionary Attribution
+
+          Source: PanLex / cointegrated/panlex-meanings
+          Snapshot represented by the dataset: PanLex 20240301
+          Source: https://panlex.org/
+          Dataset: https://huggingface.co/datasets/cointegrated/panlex-meanings
+          License: CC0 1.0 Universal.
+
+          BembaHub uses direct English-Bemba lexical pairs created by joining
+          the Bemba and English language subsets on PanLex meaning IDs and
+          retaining single-word expressions.
+
+          PanLex asks users to cite:
+          Kamholz, David, Jonathan Pool, and Susan M. Colowick. 2014.
+          PanLex: Building a Resource for Panlingual Lexical Translation.
+          Proceedings of the 9th International Conference on Language Resources
+          and Evaluation (LREC 2014).
+          EOF
+
+      - name: Commit generated PanLex dictionary pack
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/dictionary/panlex-english-bemba-words.jsonl data/dictionary/PANLEX-BEMBA-ATTRIBUTION.md
+          git diff --cached --quiet || git commit -m "Add PanLex English-Bemba dictionary pack"
+          git pull --rebase origin main
+          git push origin HEAD:main
