@@ -45,9 +45,24 @@ async function runMt560Enrichment() {
 }
 
 async function runLocalEnrichment() {
-  await runMt560Enrichment();
-  await runTatoebaDictionaryImport();
-  await runPanlexDictionaryImport();
+  const steps = [
+    ["MT560", runMt560Enrichment],
+    ["Tatoeba", runTatoebaDictionaryImport],
+    ["PanLex", runPanlexDictionaryImport],
+  ];
+
+  for (const [name, run] of steps) {
+    try {
+      await run();
+    } catch (err) {
+      console.error("[LOCAL_ENRICHMENT_FAILED]", JSON.stringify({
+        source: name,
+        error: err?.message || String(err),
+      }));
+      // Keep the enrichment chain moving. One optional source must not
+      // prevent later dictionary packs from importing.
+    }
+  }
 }
 
 async function importLiseliIfNeeded() {
