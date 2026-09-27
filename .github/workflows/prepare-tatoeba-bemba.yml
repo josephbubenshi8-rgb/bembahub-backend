@@ -18,41 +18,87 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check current Tatoeba Bemba export
+        id: check
+        run: |
+          set -euo pipefail
+          INDEX_URL="https://downloads.tatoeba.org/exports/per_language/bem/"
+          if ! curl -fsSL --retry 3 --retry-delay 2 "$INDEX_URL" -o /tmp/tatoeba-bem-index.html; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Tatoeba currently has no accessible per-language Bemba export directory."
+            exit 0
+          fi
+          if ! grep -q "bem_sentences.tsv.bz2" /tmp/tatoeba-bem-index.html; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Tatoeba Bemba sentence export is not currently listed."
+            exit 0
+          fi
+          if ! grep -q "bem.*eng.*_links.tsv.bz2\|eng.*bem.*_links.tsv.bz2" /tmp/tatoeba-bem-index.html; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Tatoeba Bemba-English link export is not currently listed."
+            exit 0
+          fi
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
       - name: Build single-word English-Bemba dictionary pack
+        if: steps.check.outputs.available == 'true'
         run: |
           set -euo pipefail
           mkdir -p data/dictionary /tmp/tatoeba
           cd /tmp/tatoeba
-          curl -fL --retry 5 --retry-delay 2 \
-            -o bem-eng.txt.zip \
-            https://object.pouta.csc.fi/OPUS-Tatoeba/v2026-07-08/moses/bem-eng.txt.zip
-          unzip -o bem-eng.txt.zip
-          ls -lh
-          BEM_FILE="$(find . -maxdepth 1 -type f -name '*bem' | head -n 1)"
-          ENG_FILE="$(find . -maxdepth 1 -type f -name '*eng' | head -n 1)"
-          if [ -z "$BEM_FILE" ] || [ -z "$ENG_FILE" ]; then
-            echo "Could not find aligned .bem and .eng files in the OPUS archive"
+
+          curl -fL --retry 5 --retry-delay 2 -o bem_sentences.tsv.bz2 \
+            https://downloads.tatoeba.org/exports/per_language/bem/bem_sentences.tsv.bz2
+          curl -fL --retry 5 --retry-delay 2 -o eng_sentences.tsv.bz2 \
+            https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2
+
+          LINK_NAME="$(grep -oE '([a-z]{3}-[a-z]{3})_links.tsv.bz2' /tmp/tatoeba-bem-index.html | grep -E 'bem-eng|eng-bem' | head -n 1 || true)"
+          if [ -z "$LINK_NAME" ]; then
+            echo "Could not determine the Bemba-English link filename."
             exit 1
           fi
-          echo "Bemba file: $BEM_FILE"
-          echo "English file: $ENG_FILE"
+          curl -fL --retry 5 --retry-delay 2 -o links.tsv.bz2 \
+            "https://downloads.tatoeba.org/exports/per_language/bem/$LINK_NAME"
+
+          bunzip2 -f bem_sentences.tsv.bz2 eng_sentences.tsv.bz2 links.tsv.bz2
+
           python <<'PY'
           import json, re
           from pathlib import Path
+
           root = Path("/tmp/tatoeba")
-          bem_file = next(root.glob("*bem"))
-          eng_file = next(root.glob("*eng"))
+
+          def read_sentences(path):
+              out = {}
+              with path.open("r", encoding="utf-8") as f:
+                  for line in f:
+                      parts = line.rstrip("\n").split("\t", 2)
+                      if len(parts) == 3:
+                          sid, lang, text = parts
+                          out[sid] = text.strip()
+              return out
+
+          bem = read_sentences(root / "bem_sentences.tsv")
+          eng = read_sentences(root / "eng_sentences.tsv")
+
           def one_word(s):
-              s = " ".join(s.strip().split())
               return bool(re.fullmatch(r"[A-Za-zÀ-ÖØ-öø-ÿĀ-ž'’\-]+", s))
+
           seen = set()
           rows = []
-          with bem_file.open("r", encoding="utf-8") as bf, eng_file.open("r", encoding="utf-8") as ef:
-              for bem_raw, eng_raw in zip(bf, ef):
-                  bm = " ".join(bem_raw.strip().split())
-                  en = " ".join(eng_raw.strip().split())
+
+          with (root / "links.tsv").open("r", encoding="utf-8") as f:
+              for line in f:
+                  parts = line.rstrip("\n").split("\t")
+                  if len(parts) != 2:
+                      continue
+                  a, b = parts
+                  bm = bem.get(a) or bem.get(b)
+                  en = eng.get(a) or eng.get(b)
                   if not bm or not en:
                       continue
+                  bm = " ".join(bm.split())
+                  en = " ".join(en.split())
                   if not one_word(bm) or not one_word(en):
                       continue
                   key = (en.casefold(), bm.casefold())
@@ -60,37 +106,38 @@ jobs:
                       continue
                   seen.add(key)
                   rows.append({"eng": en, "bem": bm, "source": "Tatoeba", "license": "CC-BY-2.0-FR"})
+
           rows.sort(key=lambda x: (x["eng"].casefold(), x["bem"].casefold()))
-          out = Path("/home/runner/work/bembahub-backend/bembahub-backend/data/dictionary/tatoeba-english-bemba-words.jsonl")
+          out = Path("data/dictionary/tatoeba-english-bemba-words.jsonl")
           out.parent.mkdir(parents=True, exist_ok=True)
           with out.open("w", encoding="utf-8") as f:
               for row in rows:
                   f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
           print("Dictionary word pairs written:", len(rows))
-          print("Output bytes:", out.stat().st_size)
-          if len(rows) == 0:
+          if not rows:
               raise RuntimeError("No single-word English-Bemba pairs were extracted")
           PY
 
       - name: Add Tatoeba attribution
+        if: steps.check.outputs.available == 'true'
         run: |
           cat > data/dictionary/TATOEBA-BEMBA-ATTRIBUTION.md <<'EOF'
           # Tatoeba English-Bemba Dictionary Attribution
 
-          Source: Tatoeba
-          Tatoeba project: https://tatoeba.org/
-          OPUS/Tatoeba release: https://github.com/Helsinki-NLP/Tatoeba-Challenge
-          License: CC BY 2.0 FR for the Tatoeba textual data; attribution required.
+          Source: Tatoeba — https://tatoeba.org/
+          Current official export source: https://downloads.tatoeba.org/exports/
+          License: CC BY 2.0 FR for Tatoeba textual data; attribution required.
 
-          BembaHub uses only aligned single-word English-Bemba pairs selected from
-          the Tatoeba English-Bemba parallel corpus. The generated pack is a
-          derived selection, not a copy of the complete Tatoeba corpus.
+          BembaHub derives only aligned single-word English-Bemba pairs from
+          Tatoeba sentence/link exports. The generated file is a derived
+          selection, not a copy of the complete Tatoeba corpus.
 
-          Required attribution: "Tatoeba.org and its contributors", used under
-          CC BY 2.0 FR.
+          Attribution: "Tatoeba.org and its contributors".
           EOF
 
       - name: Commit generated Tatoeba dictionary pack
+        if: steps.check.outputs.available == 'true'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -99,3 +146,10 @@ jobs:
           git diff --cached --quiet || git commit -m "Add Tatoeba English-Bemba dictionary pack"
           git pull --rebase origin main
           git push origin HEAD:main
+
+      - name: Report unavailable Bemba export
+        if: steps.check.outputs.available != 'true'
+        run: |
+          echo "Tatoeba source check completed successfully."
+          echo "No current Bemba export is available, so no dictionary pack was generated."
+          echo "This is intentionally non-failing; other BembaHub dictionary imports continue independently."
