@@ -100,7 +100,7 @@ function isOverloadError(err) {
   const msg = typeof err.message === "string" ? err.message : "";
   return err.status === 503 || err.code === 503 || /UNAVAILABLE|"code"\s*:\s*503/.test(msg);
 }
-const OVERLOAD_COOLDOWN_SECONDS = 20;
+const OVERLOAD_COOLDOWN_SECONDS = 6;
 
 // Every Gemini call in this file goes through here. `label` is for logging
 // only — never includes user text content, just language pair / char count,
@@ -239,7 +239,7 @@ app.post("/auth/reset-password", asyncRoute(async (req, res) => {
    shape; new callers should send {text, sourceLang, targetLang}.
 ══════════════════════════════════════════ */
 const LONG_TRANSLATION_CHARS = 6500;
-const GEMINI_RETRY_DELAYS_MS = [1500, 4000, 8000];
+const GEMINI_RETRY_DELAYS_MS = [7000, 14000, 28000];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -297,7 +297,10 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (!(err instanceof QuotaExceededError) || err.reason !== "overload" || attempt >= GEMINI_RETRY_DELAYS_MS.length) {
         throw err;
       }
-      const delay = GEMINI_RETRY_DELAYS_MS[attempt];
+      const delay = Math.max(
+        GEMINI_RETRY_DELAYS_MS[attempt],
+        (err.retryAfterSeconds || OVERLOAD_COOLDOWN_SECONDS) * 1000 + 250
+      );
       console.log(`[GEMINI_RETRY] ${srcLang}->${tgtLang} attempt ${attempt + 1} after ${delay}ms`);
       await sleep(delay);
     }
