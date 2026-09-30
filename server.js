@@ -198,7 +198,6 @@ app.put("/auth/theme", requireAuth, asyncRoute(async (req, res) => {
   const user = await db.updateUserTheme(req.user.id, theme);
   res.json({ user: publicUser(user) });
 }));
-
 app.put("/auth/password", requireAuth, asyncRoute(async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: "New password must be at least 6 characters." });
@@ -239,14 +238,112 @@ app.post("/auth/reset-password", asyncRoute(async (req, res) => {
    Backward compatible with the original {text, direction:'en-bm'|'bm-en'}
    shape; new callers should send {text, sourceLang, targetLang}.
 ══════════════════════════════════════════ */
+const LONG_TRANSLATION_CHARS = 6500;
+const GEMINI_RETRY_DELAYS_MS = [1500, 4000, 8000];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function splitTranslationText(text, maxChars = LONG_TRANSLATION_CHARS) {
+  const normalized = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (normalized.length <= maxChars) return [normalized];
+
+  const paragraphs = normalized.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  const chunks = [];
+  let current = "";
+
+  const addPart = (part) => {
+    if (!part) return;
+    if (part.length > maxChars) {
+      const sentences = part.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [part];
+      for (const sentence of sentences) {
+        const next = current ? current + " " + sentence.trim() : sentence.trim();
+        if (next.length > maxChars && current) {
+          chunks.push(current);
+          current = sentence.trim();
+        } else {
+          current = next;
+        }
+      }
+      return;
+    }
+    const next = current ? current + "\n\n" + part : part;
+    if (next.length > maxChars && current) {
+      chunks.push(current);
+      current = part;
+    } else {
+      current = next;
+    }
+  };
+
+  for (const paragraph of paragraphs) addPart(paragraph);
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : [normalized];
+}
+
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
-  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Return only the translation, nothing else:\n\n${text}`;
-  const response = await callGemini(
-    () => ai.models.generateContent({ model: "gemini-flash-latest", contents: prompt }),
-    `translate ${srcLang}->${tgtLang} (${text.length} chars)`
-  );
-  return (response.text || "").trim();
+  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await callGemini(
+        () => ai.models.generateContent({ model: "gemini-flash-latest", contents: prompt }),
+        `translate ${srcLang}->${tgtLang} (${text.length} chars)`
+      );
+      return (response.text || "").trim();
+    } catch (err) {
+      if (!(err instanceof QuotaExceededError) || err.reason !== "overload" || attempt >= GEMINI_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+      const delay = GEMINI_RETRY_DELAYS_MS[attempt];
+      console.log(`[GEMINI_RETRY] ${srcLang}->${tgtLang} attempt ${attempt + 1} after ${delay}ms`);
+      await sleep(delay);
+    }
+  }
+}
+
+async function translateLongText(text, sourceLang, targetLang) {
+  const chunks = splitTranslationText(text);
+  if (chunks.length === 1) return null;
+
+  console.log(`[LONG_TRANSLATION_START] ${sourceLang}->${targetLang} chunks=${chunks.length} chars=${text.length}`);
+  const translated = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const memoryHit = await db.findTranslationMemory(chunk, sourceLang, targetLang);
+    if (memoryHit?.translation) {
+      translated.push(memoryHit.translation);
+      console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
+      continue;
+    }
+
+    const chunkHit = await db.findWordMatch(chunk, sourceLang, targetLang);
+    if (chunkHit?.translation) {
+      translated.push(chunkHit.translation);
+      console.log(`[LONG_TRANSLATION_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
+      continue;
+    }
+
+    const result = await aiTranslate(chunk, sourceLang, targetLang);
+    if (!result) throw new Error("Empty translation returned for page section " + (i + 1));
+
+    translated.push(result);
+    db.recordTranslationMemory({
+      sourceText: chunk,
+      targetText: result,
+      sourceLang,
+      targetLang,
+      source: "ai_long_section",
+      userId: null,
+    }).catch((e) => console.error("[long-translation-memory-save]", e));
+
+    console.log(`[LONG_TRANSLATION_PROGRESS] ${i + 1}/${chunks.length}`);
+  }
+
+  return translated.join("\n\n");
 }
 
 app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRoute(async (req, res) => {
@@ -269,6 +366,32 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   if (memoryHit) {
     console.log(`[TRANSLATION_MEMORY_HIT] ${sourceLang}->${targetLang}`);
     return res.json(memoryHit);
+  }
+
+  if (text.length > LONG_TRANSLATION_CHARS) {
+    try {
+      const pageTranslation = await translateLongText(text, sourceLang, targetLang);
+      if (pageTranslation) {
+        db.recordTranslationUsage({
+          en: text.trim(), bm: pageTranslation, sourceLang, targetLang,
+          source: "ai_long_page", userId: req.user ? req.user.id : null
+        }).catch((e) => console.error("[long-page-usage-save]", e));
+        db.recordTranslationMemory({
+          sourceText: text.trim(), targetText: pageTranslation,
+          sourceLang, targetLang, source: "ai_long_page",
+          userId: req.user ? req.user.id : null,
+        }).catch((e) => console.error("[long-page-memory-save]", e));
+        return res.json({
+          translation: pageTranslation,
+          source: "ai",
+          label: "AI Translation — page translated in smaller sections and saved to translation memory."
+        });
+      }
+    } catch (e) {
+      if (e instanceof QuotaExceededError) return sendQuotaResponse(res, e);
+      console.error("[LONG_TRANSLATION_FAILED]", e);
+      return res.status(503).json({ error: "Long-page translation is temporarily unavailable. Please try again shortly." });
+    }
   }
 
   // Dictionary-first, always — this is what keeps BembaHub working at all
@@ -397,8 +520,7 @@ app.post("/chat", requireAuth, rateLimit("chat", 30, 60_000), asyncRoute(async (
 }));
 
 app.delete("/chat/history", requireAuth, asyncRoute(async (req, res) => {
-  await db.clearChatMessages(req.user.id);
-  res.json({ cleared: true });
+  await db.clearChatMessages(req.user.id);  res.json({ cleared: true });
 }));
 
 /* ══════════════════════════════════════════
@@ -597,8 +719,7 @@ app.post("/admin/dictionary/:id/reject", requireAuth, requireRole("admin"), asyn
 }));
 app.post("/admin/dictionary/:id/high-confidence", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const { rows } = await db.pool.query("UPDATE words SET high_confidence=true, updated_at=now() WHERE id=$1 RETURNING *", [Number(req.params.id)]);
-  if (!rows[0]) return res.status(404).json({ error: "Word not found." });
-  res.json({ word: rows[0] });
+  if (!rows[0]) return res.status(404).json({ error: "Word not found." });  res.json({ word: rows[0] });
 }));
 app.post("/admin/dictionary/:id/reset-confidence", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const word = await db.resetConfidence(Number(req.params.id));
@@ -797,8 +918,7 @@ app.patch("/users/:id/status", requireAuth, requireRole("admin"), asyncRoute(asy
   res.json({ user: publicUser(user) });
 }));
 app.get("/leaderboard", asyncRoute(async (req, res) => {
-  res.json({ leaderboard: (await db.leaderboard()).map(publicUser) });
-}));
+  res.json({ leaderboard: (await db.leaderboard()).map(publicUser) });}));
 app.get("/stats/overview", requireAuth, asyncRoute(async (req, res) => {
   res.json(await db.statsOverview());
 }));
@@ -997,8 +1117,7 @@ async function runLiseliJob(jobId) {
         try {
           row = JSON.parse(line);
         } catch (err) {
-          throw new Error("[liseli_jsonl] Invalid JSONL at line " + rowIndex + ": " + err.message);
-        }
+          throw new Error("[liseli_jsonl] Invalid JSONL at line " + rowIndex + ": " + err.message);        }
 
         const target = LISELI_LANG_MAP[String(row.language || "").trim().toLowerCase()];
         const english = String(row.english || "").trim();
