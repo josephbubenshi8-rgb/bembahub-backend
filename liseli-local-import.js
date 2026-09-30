@@ -4,6 +4,7 @@ import * as db from "./db.js";
 import { startMt560Job, getMt560Job } from "./mt560-importer.js";
 import { runTatoebaDictionaryImport } from "./tatoeba-dictionary-importer.js";
 import { runPanlexDictionaryImport } from "./panlex-dictionary-importer.js";
+import { runClientSblImport } from "./client-sbl-importer.js";
 
 const FILE = "data/dictionary/liseli-7-language.jsonl";
 const SOURCE_NAME = "Liseli — Zambian Language Dataset";
@@ -49,6 +50,7 @@ async function runLocalEnrichment() {
     ["MT560", runMt560Enrichment],
     ["Tatoeba", runTatoebaDictionaryImport],
     ["PanLex", runPanlexDictionaryImport],
+    ["Client SBL 2026", runClientSblImport],
   ];
 
   for (const [name, run] of steps) {
