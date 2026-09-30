@@ -1,0 +1,89 @@
+name: Prepare Client SBL 2026 Translation Pack
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "data/client_sources/**"
+      - ".github/workflows/prepare-client-sbl.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install document parser
+        run: python -m pip install --upgrade python-docx
+      - name: Build English-Bemba translation pack
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          import json, re
+          from pathlib import Path
+          from docx import Document
+          root=Path("data/client_sources")
+          english=next(iter(root.glob("*EN*.docx")),None)
+          bemba=next(iter(root.glob("*BEM*.docx")),None)
+          if not english or not bemba:
+              raise SystemExit("Upload one English DOCX containing EN and one Bemba DOCX containing BEM under data/client_sources/.")
+          E=[p.text.strip() for p in Document(english).paragraphs if p.text.strip()]
+          B=[p.text.strip() for p in Document(bemba).paragraphs if p.text.strip()]
+          def lesson_starts(lines,bem=False):
+              out={}; pat=re.compile(r"(?:ISAMBILILO|ICISAMBILILO)\s+(\d+)\b",re.I) if bem else re.compile(r"Lesson\s+(\d+)\b",re.I)
+              for i,s in enumerate(lines):
+                  m=pat.search(s)
+                  if m: out.setdefault(int(m.group(1)),i)
+              return out
+          LE,LB=lesson_starts(E),lesson_starts(B,True)
+          if set(range(1,14))-set(LE) or set(range(1,14))-set(LB):
+              raise SystemExit("Could not locate all 13 lesson boundaries in both documents.")
+          dw=r"(Sun|Mon|Tue|Wed|Thu|Fri|Cimo|Cibili|Citatu|Cine|Cisano|Mutanda|Ubwa|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)"
+          mw=r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+          def split_lesson(lines,start,end):
+              x=lines[start:end]; review=None
+              for i,s in enumerate(x):
+                  if re.search(r"Personal Review|AMEPUSHO",s,re.I): review=i; break
+              main_end=review if review is not None else len(x); hs=[]
+              for i,s in enumerate(x[:main_end]):
+                  if re.match(r"^\d+\.\s",s) and re.search(dw+r"|\b"+mw,s,re.I): hs.append(i)
+                  elif re.search(r"\b"+dw+r"\s*,?\s*"+mw,s,re.I): hs.append(i)
+              starts=hs+[main_end]
+              blocks=["\n".join(x[a:z]).strip() for a,z in zip(starts,starts[1:]) if z>a]
+              if review is not None: blocks.append("\n".join(x[review:]).strip())
+              return [b for b in blocks if b]
+          rows=[]
+          for lesson in range(1,14):
+              eb=split_lesson(E,LE[lesson],LE.get(lesson+1,len(E)))
+              bb=split_lesson(B,LB[lesson],LB.get(lesson+1,len(B)))
+              if len(eb)!=len(bb): print(f"Lesson {lesson}: English={len(eb)}, Bemba={len(bb)}; common blocks only.")
+              for section,(en,bm) in enumerate(zip(eb,bb),1):
+                  rows.append({"eng":en,"bem":bm,"sourceLang":"eng","targetLang":"bem","category":"Sabbath Bible Lessons 2026","source":"client_sbl_2026","status":"unverified","contrib":"Client-provided translation","lesson":lesson,"section":section})
+          out=Path("data/translation/client-sbl-2026.jsonl"); out.parent.mkdir(parents=True,exist_ok=True)
+          with out.open("w",encoding="utf-8") as f:
+              for r in rows: f.write(json.dumps(r,ensure_ascii=False)+"\n")
+          print("SBL translation-memory pairs:",len(rows))
+          print("Output bytes:",out.stat().st_size)
+          PY
+      - name: Add source attribution
+        run: |
+          cat > data/translation/CLIENT-SBL-2026-ATTRIBUTION.md <<'EOF'
+          # Client-provided Sabbath Bible Lessons 2026
+          Source: Client-provided English and Bemba DOCX files.
+          Copyright notice remains with the original publication.
+          BembaHub use: authorized by the project owner/client as represented by Joseph Bubenshi.
+          This pack stores aligned English-Bemba lesson sections as translation-memory data.
+          It does not infer individual word translations from prose; entries remain unverified until reviewed.
+          EOF
+      - name: Commit generated pack
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/translation/client-sbl-2026.jsonl data/translation/CLIENT-SBL-2026-ATTRIBUTION.md
+          git diff --cached --quiet || git commit -m "Add client SBL 2026 English-Bemba translation pack"
+          git pull --rebase origin main
+          git push origin HEAD:main
