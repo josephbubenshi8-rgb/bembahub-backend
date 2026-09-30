@@ -1,10 +1,6 @@
-# Client-provided SBL 2026 source
-
-The English and Bemba DOCX files were supplied by the BembaHub project owner/client.
-The project owner represented that BembaHub has permission to use the material.
-
-The source publication itself carries its own 2026 copyright notice. This source is
-therefore treated as client-authorized material, not as public-domain material.
-
-BembaHub stores aligned English-Bemba lesson sections as translation memory.
-Individual word-level meanings are not automatically inferred from prose.
+# Client-provided Sabbath Bible Lessons 2026
+Source: Client-provided English and Bemba DOCX files.
+Copyright notice remains with the original publication.
+BembaHub use: authorized by the project owner/client as represented by Joseph Bubenshi.
+This pack stores aligned English-Bemba lesson sections as translation-memory data.
+It does not infer individual word translations from prose; entries remain unverified until reviewed.
