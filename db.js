@@ -239,7 +239,7 @@ export async function findWordMatch(text, sourceLang, targetLang) {
 // spending another Gemini request.
 
 function normalizeMemoryText(text) {
-  return (text || "").replace(/\\s+/g, " ").trim().toLowerCase();
+  return (text || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 export async function findTranslationMemory(text, sourceLang, targetLang) {
