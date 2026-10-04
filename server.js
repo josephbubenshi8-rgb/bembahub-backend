@@ -6,6 +6,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import { GoogleGenAI } from "@google/genai";
+import readline from "node:readline";
 
 import * as db from "./db.js";
 import { signToken, requireAuth, requireRole, optionalAuth, publicUser } from "./auth.js";
