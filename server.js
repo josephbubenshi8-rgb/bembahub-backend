@@ -189,7 +189,9 @@ app.get("/auth/me", requireAuth, (req, res) => res.json({ user: publicUser(req.u
 app.put("/auth/me", requireAuth, asyncRoute(async (req, res) => {
   const { name, email } = req.body || {};
   if (!name || !email) return res.status(400).json({ error: "name and email are required." });
-  const user = await db.updateUserProfile(req.user.id, { name, email });
+  const existing = await db.getUserByEmail(email);
+  if (existing && existing.id !== req.user.id) return res.status(409).json({ error: "That email address is already in use." });
+  const user = await db.updateUserProfile(req.user.id, { name: name.trim(), email: email.trim() });
   res.json({ user: publicUser(user) });
 }));
 
