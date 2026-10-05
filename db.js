@@ -235,13 +235,9 @@ export async function findWordMatch(text, sourceLang, targetLang) {
     return { translation: cached[0].bm, source: "ai", confidence: cached[0].confidence_score, wordId: cached[0].id, pron: cached[0].pron || undefined, label: cached[0].high_confidence ? "AI Translation (high-confidence, awaiting admin verification)" : "AI Translation (previously generated, awaiting verification)" };
   }
 
-  if (q.length >= 4) {
-    const { rows: partial } = await pool.query(
-      `SELECT * FROM words WHERE status='verified' AND source_lang=$1 AND target_lang=$2 AND LOWER(TRIM(en)) LIKE $3 LIMIT 1`,
-      [sourceLang, targetLang, `%${q}%`]
-    );
-    if (partial[0]) return { translation: partial[0].bm, source: "dictionary", confidence: partial[0].confidence_score, wordId: partial[0].id, pron: partial[0].pron || undefined, label: "Verified (close match) — BembaHub dictionary" };
-  }
+  // Deliberately no fuzzy/partial match here. Translation must never turn a
+  // similar-looking dictionary entry into a false exact translation. Fuzzy
+  // matching remains available through /dictionary for human discovery.
   return null;
 }
 
