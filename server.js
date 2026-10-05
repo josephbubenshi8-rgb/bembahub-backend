@@ -256,24 +256,61 @@ function splitTranslationText(text, maxChars = LONG_TRANSLATION_CHARS) {
   const chunks = [];
   let current = "";
 
+  const pushCurrent = () => {
+    if (current) {
+      chunks.push(current);
+      current = "";
+    }
+  };
+
+  const addWordsWithinLimit = (textPart, separator = " ") => {
+    const words = textPart.split(/\s+/).filter(Boolean);
+    for (const word of words) {
+      if (word.length > maxChars) {
+        pushCurrent();
+        for (let i = 0; i < word.length; i += maxChars) {
+          chunks.push(word.slice(i, i + maxChars));
+        }
+        continue;
+      }
+      const next = current ? current + separator + word : word;
+      if (next.length > maxChars && current) {
+        pushCurrent();
+        current = word;
+      } else {
+        current = next;
+      }
+    }
+  };
+
   const addPart = (part) => {
     if (!part) return;
+
     if (part.length > maxChars) {
       const sentences = part.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [part];
       for (const sentence of sentences) {
-        const next = current ? current + " " + sentence.trim() : sentence.trim();
-        if (next.length > maxChars && current) {
-          chunks.push(current);
-          current = sentence.trim();
+        const cleanSentence = sentence.trim();
+        if (!cleanSentence) continue;
+
+        const separator = current ? " " : "";
+        if ((current + separator + cleanSentence).length <= maxChars) {
+          current += separator + cleanSentence;
+          continue;
+        }
+
+        pushCurrent();
+        if (cleanSentence.length <= maxChars) {
+          current = cleanSentence;
         } else {
-          current = next;
+          addWordsWithinLimit(cleanSentence);
         }
       }
       return;
     }
+
     const next = current ? current + "\n\n" + part : part;
     if (next.length > maxChars && current) {
-      chunks.push(current);
+      pushCurrent();
       current = part;
     } else {
       current = next;
@@ -281,10 +318,10 @@ function splitTranslationText(text, maxChars = LONG_TRANSLATION_CHARS) {
   };
 
   for (const paragraph of paragraphs) addPart(paragraph);
-  if (current) chunks.push(current);
+  pushCurrent();
+
   return chunks.length ? chunks : [normalized];
 }
-
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
   const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
