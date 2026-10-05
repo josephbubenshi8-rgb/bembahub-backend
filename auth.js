@@ -1,20 +1,16 @@
 import jwt from "jsonwebtoken";
 import { getUserById, publicUser } from "./db.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "bembahub-dev-secret-change-me";
-if (!process.env.JWT_SECRET) {
-  // Loud and impossible to miss in Render's logs — a hardcoded fallback secret
-  // means ANY token can be forged (including an admin one) if this is ever
-  // actually running unset. Warn instead of crashing, since crashing on an
-  // env-var check could take down a working deployment if something else is
-  // misconfigured — but this must never fail silently.
-  console.error("╔══════════════════════════════════════════════════════════════╗");
-  console.error("║ SECURITY WARNING: JWT_SECRET is not set in the environment.    ║");
-  console.error("║ Falling back to a well-known dev secret — auth tokens for ANY  ║");
-  console.error("║ user (including admin) can be forged by anyone who knows this  ║");
-  console.error("║ fallback. Set JWT_SECRET now and redeploy.                     ║");
-  console.error("╚══════════════════════════════════════════════════════════════╝");
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_SECRET must be set in production.");
+  }
+  console.error("SECURITY WARNING: JWT_SECRET is not set. Set it before using authentication.");
+  // Local development may continue, but production startup is blocked above.
+  // signToken/verify will still require a secret, so local auth must provide one.
 }
+
 const JWT_EXPIRES_IN = "30d";
 
 export function signToken(user) {
