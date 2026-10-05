@@ -47,7 +47,7 @@ export async function initSchema() {
   if (wc[0].n === 0) {
     for (const w of SEED_WORDS) {
       await pool.query(
-        `INSERT INTO words (en,bm,cat,pos,pron,ex,synonyms,antonyms,contrib,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'approved')`,
+        `INSERT INTO words (en,bm,cat,pos,pron,ex,synonyms,antonyms,contrib,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'verified')`,
         [w.en, w.bm, w.cat, w.pos, w.pron, w.ex, w.syn, w.ant, w.contrib]
       );
     }
