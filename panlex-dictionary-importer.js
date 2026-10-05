@@ -10,10 +10,25 @@ const BATCH_SIZE = 500;
 
 async function alreadyImported() {
   const { rows } = await db.pool.query(
-    "SELECT COALESCE(SUM(imported_count),0)::int AS total FROM dictionary_imports WHERE source_name=$1",
+    "SELECT COALESCE(SUM(imported_count),0)::int AS imported, COALESCE(SUM(skipped_count),0)::int AS skipped FROM dictionary_imports WHERE source_name=$1",
     [PANLEX_SOURCE_NAME]
   );
-  return Number(rows[0]?.total || 0) > 0;
+  const recorded = Number(rows[0]?.imported || 0) + Number(rows[0]?.skipped || 0);
+  if (recorded === 0) return false;
+
+  // A previous run may have committed several batches before the process
+  // stopped. Only skip the source when the recorded rows cover the whole
+  // JSONL pack; otherwise restart from the beginning (bulk import is
+  // idempotent) and finish the missing batches.
+  const input = fs.createReadStream(PANLEX_FILE, { encoding: "utf8" });
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+  let totalRows = 0;
+  try {
+    for await (const line of rl) totalRows++;
+  } finally {
+    rl.close();
+  }
+  return recorded >= totalRows;
 }
 
 export async function runPanlexDictionaryImport() {
