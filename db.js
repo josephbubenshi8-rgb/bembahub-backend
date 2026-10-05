@@ -34,6 +34,18 @@ const SEED_USERS = []; // No demo/seed users are created. See adminBootstrap() b
 // the only account ever auto-created is a real admin from your own env vars, and a
 // single shared "guest" identity that is always excluded from leaderboards/stats.
 
+export async function importStarterDictionary(importedBy) {
+  const entries = SEED_WORDS.map(w => ({
+    en: w.en, bm: w.bm, cat: w.cat, pos: w.pos, pron: w.pron, ex: w.ex,
+    synonyms: w.syn || [], antonyms: w.ant || [], sourceLang: "eng", targetLang: "bem",
+    status: "unverified", contrib: w.contrib || "BembaHub Starter Pack", source: "starter-pack",
+  }));
+  return bulkImportDictionary({
+    entries, sourceName: "BembaHub Starter Dictionary", sourceUrl: "",
+    sourceLicense: "BembaHub internal starter pack", importedBy, defaultStatus: "unverified",
+  });
+}
+
 export async function initSchema() {
   const dir = path.join(__dirname, "migrations");
   const files = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
