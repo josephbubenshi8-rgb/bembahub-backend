@@ -43,7 +43,8 @@ export async function runMt560Job(id){
 
     await patch(id,{status:"running",started_at:j.started_at||new Date().toISOString(),error_message:null});
 
-    const resumeOffset=Number(j.next_offset||0);\n    let offset=resumeOffset, validPairCount=0, mem=Number(j.memory_imported_count||0), dict=Number(j.dictionary_imported_count||0), skip=Number(j.skipped_count||0), lineNumber=0;
+    const resumeOffset=Number(j.next_offset||0);
+    let offset=resumeOffset, validPairCount=0, mem=Number(j.memory_imported_count||0), dict=Number(j.dictionary_imported_count||0), skip=Number(j.skipped_count||0), lineNumber=0;
     const input=fs.createReadStream(MT560_FILE,{encoding:"utf8"});
     rl=readline.createInterface({input,crlfDelay:Infinity});
 
@@ -75,6 +76,8 @@ export async function runMt560Job(id){
       try{ row=JSON.parse(line); }catch(e){ throw new Error("Invalid MT560 JSONL at line "+lineNumber+": "+e.message); }
       const en=clean(row.eng),bm=clean(row.bem);
       if(!en||!bm||en===bm){skip++;continue;}
+      validPairCount++;
+      if(validPairCount<=resumeOffset)continue;
       batch.push({s:en,k:en.toLowerCase(),t:bm});
       offset++;
       if(batch.length>=BATCH_SIZE){
