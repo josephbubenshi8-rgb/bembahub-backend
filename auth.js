@@ -1,14 +1,13 @@
 import jwt from "jsonwebtoken";
 import { getUserById, publicUser } from "./db.js";
 
-const JWT_SECRET = process.env.JWT_SECRET;
+let JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   if (process.env.NODE_ENV === "production") {
     throw new Error("JWT_SECRET must be set in production.");
   }
-  console.error("SECURITY WARNING: JWT_SECRET is not set. Set it before using authentication.");
-  // Local development may continue, but production startup is blocked above.
-  // signToken/verify will still require a secret, so local auth must provide one.
+  JWT_SECRET = "bembahub-local-development-secret";
+  console.warn("JWT_SECRET is not set; using a development-only secret. Set JWT_SECRET before deploying.");
 }
 
 const JWT_EXPIRES_IN = "30d";
