@@ -706,6 +706,12 @@ app.post("/admin/dictionary/import", requireAuth, requireRole("admin"), asyncRou
   res.status(201).json({ success: true, ...result });
 }));
 
+app.post("/admin/dictionary/import-starter", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const result = await db.importStarterDictionary(req.user.id);
+  await db.logActivity("BembaHub starter dictionary pack imported by " + req.user.name, "sky");
+  res.status(201).json({ success:true, ...result });
+}));
+
 app.get("/admin/dictionary", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const { status, q, sourceLang, targetLang, sort } = req.query;
   res.json({ entries: await db.listDictionaryCandidates({ status, q, sourceLang, targetLang, sort }) });
