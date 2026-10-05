@@ -75,7 +75,7 @@ export async function runMt560Job(id){
       let row;
       try{ row=JSON.parse(line); }catch(e){ throw new Error("Invalid MT560 JSONL at line "+lineNumber+": "+e.message); }
       const en=clean(row.eng),bm=clean(row.bem);
-      if(!en||!bm||en===bm){skip++;continue;}
+      if(!en||!bm||en===bm){if(validPairCount>=resumeOffset)skip++;continue;}
       validPairCount++;
       if(validPairCount<=resumeOffset)continue;
       batch.push({s:en,k:en.toLowerCase(),t:bm});
