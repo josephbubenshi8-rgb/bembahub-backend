@@ -43,7 +43,7 @@ export async function runMt560Job(id){
 
     await patch(id,{status:"running",started_at:j.started_at||new Date().toISOString(),error_message:null});
 
-    let offset=Number(j.next_offset||0), mem=Number(j.memory_imported_count||0), dict=Number(j.dictionary_imported_count||0), skip=Number(j.skipped_count||0), lineNumber=0;
+    const resumeOffset=Number(j.next_offset||0);\n    let offset=resumeOffset, validPairCount=0, mem=Number(j.memory_imported_count||0), dict=Number(j.dictionary_imported_count||0), skip=Number(j.skipped_count||0), lineNumber=0;
     const input=fs.createReadStream(MT560_FILE,{encoding:"utf8"});
     rl=readline.createInterface({input,crlfDelay:Infinity});
 
