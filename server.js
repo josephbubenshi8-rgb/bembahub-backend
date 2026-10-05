@@ -598,10 +598,13 @@ app.post("/dictionary/suggest", requireAuth, rateLimit("suggest", 30, 60 * 60_00
 
 app.post("/dictionary/correct", requireAuth, rateLimit("correct", 30, 60 * 60_000), asyncRoute(async (req, res) => {
   const { wordId, suggested, reason } = req.body || {};
+  const cleanSuggested = typeof suggested === "string" ? suggested.trim() : "";
+  if (!wordId || !cleanSuggested) return res.status(400).json({ error: "wordId and a suggested translation are required." });
+  if (cleanSuggested.length > 500) return res.status(400).json({ error: "Suggested translation is too long." });
   const original = await db.getWordById(Number(wordId));
   if (!original) return res.status(404).json({ error: "Word not found." });
   const entry = await db.createPending({
-    type: "correction", en: original.en, original: original.bm, suggested, reason, cat: original.cat,
+    type: "correction", en: original.en, original: original.bm, suggested: cleanSuggested, reason: typeof reason === "string" ? reason.trim().slice(0, 500) : "", cat: original.cat,
     sourceLang: original.source_lang, targetLang: original.target_lang,
     by_name: req.user.name, by_id: req.user.id,
   });
