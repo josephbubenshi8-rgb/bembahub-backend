@@ -156,21 +156,25 @@ app.get("/", (req, res) => res.json({ status: "BembaHub Backend is running!" }))
    AUTH
 ══════════════════════════════════════════ */
 app.post("/auth/register", rateLimit("register", 10, 60 * 60_000), asyncRoute(async (req, res) => {
-  const { name, email, password, role } = req.body || {};
-  if (!name || !email || !password) return res.status(400).json({ error: "name, email and password are required." });
+  const { name, password, role } = req.body || {};
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  const cleanName = typeof name === "string" ? name.trim() : "";
+  if (!cleanName || !email || !password) return res.status(400).json({ error: "name, email and password are required." });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Please provide a valid email address." });
   if (await db.getUserByEmail(email)) return res.status(409).json({ error: "Email already registered." });
   const allowedRoles = ["visitor", "translator"];
   const finalRole = allowedRoles.includes(role) ? role : "visitor";
   const passHash = bcrypt.hashSync(password, 10);
-  const user = await db.createUser({ name, email, passHash, role: finalRole });
+  const user = await db.createUser({ name: cleanName, email, passHash, role: finalRole });
   await db.logActivity(`${user.name} registered as ${user.role}`, "gold");
   await db.createNotification(user.id, `Welcome to BembaHub, ${user.name}! Start by browsing the dictionary or trying a translation.`, "info");
   res.status(201).json({ token: signToken(user), user: publicUser(user) });
 }));
 
 app.post("/auth/login", rateLimit("login", 10, 15 * 60_000), asyncRoute(async (req, res) => {
-  const { email, password } = req.body || {};
-  const user = await db.getUserByEmail(email || "");
+  const { password } = req.body || {};
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  const user = await db.getUserByEmail(email);
   if (!user || !user.pass_hash || !bcrypt.compareSync(password || "", user.pass_hash)) {
     return res.status(401).json({ error: "Invalid email or password." });
   }
@@ -187,11 +191,14 @@ app.post("/auth/guest", asyncRoute(async (req, res) => {
 app.get("/auth/me", requireAuth, (req, res) => res.json({ user: publicUser(req.user) }));
 
 app.put("/auth/me", requireAuth, asyncRoute(async (req, res) => {
-  const { name, email } = req.body || {};
-  if (!name || !email) return res.status(400).json({ error: "name and email are required." });
+  const { name } = req.body || {};
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  const cleanName = typeof name === "string" ? name.trim() : "";
+  if (!cleanName || !email) return res.status(400).json({ error: "name and email are required." });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Please provide a valid email address." });
   const existing = await db.getUserByEmail(email);
   if (existing && existing.id !== req.user.id) return res.status(409).json({ error: "That email address is already in use." });
-  const user = await db.updateUserProfile(req.user.id, { name: name.trim(), email: email.trim() });
+  const user = await db.updateUserProfile(req.user.id, { name: cleanName, email });
   res.json({ user: publicUser(user) });
 }));
 
@@ -212,7 +219,7 @@ app.put("/auth/password", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 app.post("/auth/forgot-password", rateLimit("forgot-password", 5, 60 * 60_000), asyncRoute(async (req, res) => {
-  const { email } = req.body || {};
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
   const user = email ? await db.getUserByEmail(email) : null;
   if (user) {
     const token = await db.createPasswordReset(user.id);
