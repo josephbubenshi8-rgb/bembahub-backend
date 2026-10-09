@@ -445,6 +445,47 @@ async function callMistralTranslation(text, sourceName, targetName, label) {
   }
 }
 
+async function callHuggingFaceTranslation(text, sourceName, targetName, label) {
+  if (!process.env.HF_TOKEN) throw new Error("Hugging Face Inference Providers backup is not configured.");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.HF_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.HF_MODEL || "openai/gpt-oss-120b:fastest",
+        temperature: 0.2,
+        max_tokens: 2048,
+        messages: [
+          {
+            role: "system",
+            content: `Translate text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.`,
+          },
+          { role: "user", content: text },
+        ],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      // Never log provider response bodies or user translation text.
+      throw new Error(`Hugging Face Inference Providers returned HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    const translation = data?.choices?.[0]?.message?.content?.trim();
+    if (!translation) throw new Error("Hugging Face Inference Providers returned an empty translation.");
+    console.log(`[HUGGINGFACE_TRANSLATION_SUCCESS] ${label} model=${data?.model || "unknown"}`);
+    return translation;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
   const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
@@ -491,7 +532,16 @@ async function aiTranslate(text, srcLang, tgtLang) {
         }
       }
 
-      if (process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY || process.env.MISTRAL_API_KEY) {
+      if (process.env.HF_TOKEN) {
+        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Hugging Face Inference Providers.`);
+        try {
+          return await callHuggingFaceTranslation(text, srcName, tgtName, label);
+        } catch (backupError) {
+          console.error(`[AI_FAILOVER_HUGGINGFACE_FAILED] Hugging Face Inference Providers unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+        }
+      }
+
+      if (process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY || process.env.MISTRAL_API_KEY || process.env.HF_TOKEN) {
         console.error(`[AI_FAILOVER_FAILED] Gemini and configured backup providers unavailable for ${srcLang}->${tgtLang}`);
         throw err;
       }
