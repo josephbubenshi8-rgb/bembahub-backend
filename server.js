@@ -486,41 +486,38 @@ async function callHuggingFaceTranslation(text, sourceName, targetName, label) {
   }
 }
 
-async function callCerebrasTranslation(text, sourceName, targetName, label) {
-  if (!process.env.CEREBRAS_API_KEY) throw new Error("Cerebras backup provider is not configured.");
+async function callCloudflareWorkersAITranslation(text, sourceName, targetName, label) {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
+  if (!accountId || !apiToken) throw new Error("Cloudflare Workers AI backup is not configured.");
 
+  const model = process.env.CLOUDFLARE_AI_MODEL || "@cf/meta/llama-3.1-8b-instruct";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch("https://api.cerebras.ai/v1/chat/completions", {
+    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${model.split("/").map(encodeURIComponent).join("/")}`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.CEREBRAS_API_KEY}`,
+        "Authorization": `Bearer ${apiToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.CEREBRAS_MODEL || "gpt-oss-120b",
-        temperature: 0.2,
-        max_completion_tokens: 2048,
-        messages: [
-          {
-            role: "system",
-            content: `Translate text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.`,
-          },
-          { role: "user", content: text },
-        ],
+        prompt: `Translate the following text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.\n\n${text}`,
+        max_tokens: 2048,
       }),
       signal: controller.signal,
     });
 
     if (!response.ok) {
       // Never log provider response bodies or user translation text.
-      throw new Error(`Cerebras provider returned HTTP ${response.status}`);
+      throw new Error(`Cloudflare Workers AI returned HTTP ${response.status}`);
     }
     const data = await response.json();
-    const translation = data?.choices?.[0]?.message?.content?.trim();
-    if (!translation) throw new Error("Cerebras returned an empty translation.");
-    console.log(`[CEREBRAS_TRANSLATION_SUCCESS] ${label} model=${data?.model || "unknown"}`);
+    const translation = data?.result?.response?.trim();
+    if (!data?.success || !translation) {
+      throw new Error("Cloudflare Workers AI returned an empty or unsuccessful response.");
+    }
+    console.log(`[CLOUDFLARE_AI_TRANSLATION_SUCCESS] ${label} model=${model}`);
     return translation;
   } finally {
     clearTimeout(timeout);
@@ -582,16 +579,16 @@ async function aiTranslate(text, srcLang, tgtLang) {
         }
       }
 
-      if (process.env.CEREBRAS_API_KEY) {
-        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Cerebras.`);
+      if (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN) {
+        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Cloudflare Workers AI.`);
         try {
-          return await callCerebrasTranslation(text, srcName, tgtName, label);
+          return await callCloudflareWorkersAITranslation(text, srcName, tgtName, label);
         } catch (backupError) {
-          console.error(`[AI_FAILOVER_CEREBRAS_FAILED] Cerebras unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+          console.error(`[AI_FAILOVER_CLOUDFLARE_AI_FAILED] Cloudflare Workers AI unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
       }
 
-      if (process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY || process.env.MISTRAL_API_KEY || process.env.HF_TOKEN || process.env.CEREBRAS_API_KEY) {
+      if (process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY || process.env.MISTRAL_API_KEY || process.env.HF_TOKEN || (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN)) {
         console.error(`[AI_FAILOVER_FAILED] Gemini and configured backup providers unavailable for ${srcLang}->${tgtLang}`);
         throw err;
       }
