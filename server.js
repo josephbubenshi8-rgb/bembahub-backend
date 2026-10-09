@@ -335,8 +335,9 @@ async function callGroqTranslation(text, sourceName, targetName, label) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
-        temperature: 0.2,
+        model: process.env.GROQ_MODEL || "qwen/qwen3.8-27b",
+        temperature: 0.7,
+        reasoning_effort: "none",
         messages: [
           {
             role: "system",
