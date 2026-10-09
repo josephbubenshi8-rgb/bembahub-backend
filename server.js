@@ -422,16 +422,13 @@ async function aiTranslate(text, srcLang, tgtLang) {
       // Automatic translation failover: only activate Groq when its server-side
       // key is configured. Do not wait through Gemini overload retries when a
       // backup is available. Existing Gemini-only behavior remains unchanged
-      // for deployments that have not configured GROQ_API_KEY.
+      // for deployments without configured backup-provider keys.
       const label = `${srcLang}->${tgtLang} (${text.length} chars)`;
-      let groqError = null;
-
       if (process.env.GROQ_API_KEY) {
         console.warn(`[AI_FAILOVER] Gemini unavailable for ${srcLang}->${tgtLang}; trying Groq.`);
         try {
           return await callGroqTranslation(text, srcName, tgtName, label);
         } catch (backupError) {
-          groqError = backupError;
           console.error(`[AI_FAILOVER_GROQ_FAILED] Groq unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
       }
