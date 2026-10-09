@@ -322,6 +322,46 @@ function splitTranslationText(text, maxChars = LONG_TRANSLATION_CHARS) {
 
   return chunks.length ? chunks : [normalized];
 }
+async function callGroqTranslation(text, sourceName, targetName, label) {
+  if (!process.env.GROQ_API_KEY) throw new Error("Groq backup provider is not configured.");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content: `Translate text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.`,
+          },
+          { role: "user", content: text },
+        ],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      // Never log provider response bodies or user translation text.
+      throw new Error(`Groq provider returned HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    const translation = data?.choices?.[0]?.message?.content?.trim();
+    if (!translation) throw new Error("Groq returned an empty translation.");
+    console.log(`[GROQ_TRANSLATION_SUCCESS] ${label}`);
+    return translation;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
   const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
@@ -332,8 +372,24 @@ async function aiTranslate(text, srcLang, tgtLang) {
         () => ai.models.generateContent({ model: "gemini-flash-latest", contents: prompt }),
         `translate ${srcLang}->${tgtLang} (${text.length} chars)`
       );
-      return (response.text || "").trim();
+      const translation = (response.text || "").trim();
+      if (!translation) throw new Error("Gemini returned an empty translation.");
+      return translation;
     } catch (err) {
+      // Automatic translation failover: only activate Groq when its server-side
+      // key is configured. Do not wait through Gemini overload retries when a
+      // backup is available. Existing Gemini-only behavior remains unchanged
+      // for deployments that have not configured GROQ_API_KEY.
+      if (process.env.GROQ_API_KEY) {
+        console.warn(`[AI_FAILOVER] Gemini unavailable for ${srcLang}->${tgtLang}; trying Groq.`);
+        try {
+          return await callGroqTranslation(text, srcName, tgtName, `${srcLang}->${tgtLang} (${text.length} chars)`);
+        } catch (backupError) {
+          console.error(`[AI_FAILOVER_FAILED] Gemini and Groq unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+          throw err;
+        }
+      }
+
       if (!(err instanceof QuotaExceededError) || err.reason !== "overload" || attempt >= GEMINI_RETRY_DELAYS_MS.length) {
         throw err;
       }
