@@ -5,23 +5,13 @@ import * as db from "./db.js";
 export const SBL_FILE = "data/translation/client-sbl-2026.jsonl";
 const BATCH_SIZE = 50;
 
-async function alreadyImported() {
-  const { rows } = await db.pool.query(
-    "SELECT COUNT(*)::int AS total FROM translation_memory WHERE source=$1",
-    ["client_sbl_2026"]
-  );
-  return Number(rows[0]?.total || 0) > 0;
-}
-
 export async function runClientSblImport() {
   if (!fs.existsSync(SBL_FILE)) {
     console.log("[SBL_LOCAL] No client SBL 2026 pack; skipping.");
     return { skipped: true, imported: 0 };
   }
-  if (await alreadyImported()) {
-    console.log("[SBL_LOCAL] Client SBL 2026 pack already imported; skipping.");
-    return { skipped: true, imported: 0 };
-  }
+  // Always scan this small pack on startup: ON CONFLICT DO NOTHING makes the import
+  // idempotent and allows a previous partial run to finish on the next boot.
   const rl = readline.createInterface({input:fs.createReadStream(SBL_FILE,{encoding:"utf8"}),crlfDelay:Infinity});
   let batch=[], imported=0, skipped=0, lineNumber=0;
   const flush=async()=>{
@@ -47,7 +37,9 @@ export async function runClientSblImport() {
       batch.push({eng:en,bem:bm}); if(batch.length>=BATCH_SIZE)await flush();
     }
     await flush();
-    await db.logActivity("Client SBL 2026 translation pack imported: "+imported.toLocaleString()+" pairs","green");
+    if (imported > 0) {
+      await db.logActivity("Client SBL 2026 translation pack imported: "+imported.toLocaleString()+" pairs","green");
+    }
     console.log("[SBL_LOCAL_COMPLETE]",JSON.stringify({lines:lineNumber,imported,skipped}));
     return {skipped:false,imported,skippedRows:skipped};
   } finally { rl.close(); }
