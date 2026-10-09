@@ -14,7 +14,7 @@
 1. Create a GroqCloud account and generate an API key: https://console.groq.com/keys
 2. Open Render Dashboard → `bembahub-backend` → Environment.
 3. Add `GROQ_API_KEY` with the key value. Keep it private; never put it in frontend files or commit it to GitHub.
-4. Optionally add `GROQ_MODEL` with a model your Groq account can access. The default is `qwen/qwen3.8-27b`.
+4. Optionally add `GROQ_MODEL` with a model your Groq account can access. The default is `openai/gpt-oss-20b`.
 5. Save changes and let Render redeploy/restart the backend.
 6. Test an English→Bemba and Bemba→English sentence. Check Render logs for `[AI_FAILOVER]` and `[GROQ_TRANSLATION_SUCCESS]` only if Gemini fails.
 
