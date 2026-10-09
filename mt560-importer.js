@@ -90,8 +90,10 @@ export async function runMt560Job(id){
     await patch(id,{next_offset:offset,processed_rows:offset,memory_imported_count:mem,dictionary_imported_count:dict,skipped_count:skip});
 
     j=await job(id);
-    if(j&&j.status!=="paused"&&j.status!=="failed"&&lineNumber>=MT560_TOTAL_ROWS){
-      await patch(id,{status:"completed",next_offset:offset,processed_rows:offset,memory_imported_count:mem,dictionary_imported_count:dict,skipped_count:skip,completed_at:new Date().toISOString()});
+    if(j&&j.status!=="paused"&&j.status!=="failed"){
+      // The prepared JSONL omits invalid upstream rows, so its line count can be
+      // lower than MT560_TOTAL_ROWS. Reaching EOF is the real completion signal.
+      await patch(id,{status:"completed",total_rows:offset,next_offset:offset,processed_rows:offset,memory_imported_count:mem,dictionary_imported_count:dict,skipped_count:skip,completed_at:new Date().toISOString()});
       await db.logActivity("MT560 English-Bemba import #"+id+" completed: "+mem.toLocaleString()+" translation pairs saved","green");
       console.log("[MT560_COMPLETE]",JSON.stringify({id,processed:offset,total:MT560_TOTAL_ROWS,memoryImported:mem,dictionaryImported:dict,skipped:skip}));
     }

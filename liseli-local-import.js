@@ -36,7 +36,7 @@ async function runMt560Enrichment() {
   if (!mt560.alreadyCompleted) {
     while (true) {
       const current = await getMt560Job(mt560.job.id);
-      if (!current || ["completed", "failed"].includes(current.status)) {
+      if (!current || ["completed", "failed", "paused"].includes(current.status)) {
         console.log("[MT560_LOCAL_END]", JSON.stringify(current));
         break;
       }

@@ -1,4 +1,5 @@
 import pg from "pg";
+import { randomBytes } from "node:crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -163,19 +164,20 @@ export async function listUsers() {
 
 /* ─────────── PASSWORD RESET ─────────── */
 export async function createPasswordReset(userId) {
-  const token = [...Array(40)].map(() => Math.floor(Math.random() * 36).toString(36)).join("");
+  // Invalidate older links so only the newest password-reset email remains usable.
+  const token = randomBytes(32).toString("hex");
   const expires = new Date(Date.now() + 1000 * 60 * 30);
+  await pool.query("UPDATE password_resets SET used=true WHERE user_id=$1 AND used=false", [userId]);
   await pool.query("INSERT INTO password_resets (token,user_id,expires_at) VALUES ($1,$2,$3)", [token, userId, expires]);
   return token;
 }
 export async function consumePasswordReset(token) {
+  // A single conditional UPDATE makes token consumption atomic under concurrent requests.
   const { rows } = await pool.query(
-    "SELECT * FROM password_resets WHERE token=$1 AND used=false AND expires_at > now()",
+    "UPDATE password_resets SET used=true WHERE token=$1 AND used=false AND expires_at > now() RETURNING *",
     [token]
   );
-  if (!rows[0]) return null;
-  await pool.query("UPDATE password_resets SET used=true WHERE token=$1", [token]);
-  return rows[0];
+  return rows[0] || null;
 }
 
 /* ─────────── LANGUAGES ─────────── */
