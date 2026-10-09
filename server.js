@@ -363,6 +363,48 @@ async function callGroqTranslation(text, sourceName, targetName, label) {
   }
 }
 
+async function callOpenRouterTranslation(text, sourceName, targetName, label) {
+  if (!process.env.OPENROUTER_API_KEY) throw new Error("OpenRouter backup provider is not configured.");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.FRONTEND_URL || "https://bemba-hub-jfk5.onrender.com",
+        "X-OpenRouter-Title": "BembaHub",
+      },
+      body: JSON.stringify({
+        model: process.env.OPENROUTER_MODEL || "openrouter/free",
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content: `Translate text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.`,
+          },
+          { role: "user", content: text },
+        ],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      // Never log provider response bodies or user translation text.
+      throw new Error(`OpenRouter provider returned HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    const translation = data?.choices?.[0]?.message?.content?.trim();
+    if (!translation) throw new Error("OpenRouter returned an empty translation.");
+    console.log(`[OPENROUTER_TRANSLATION_SUCCESS] ${label} model=${data?.model || "unknown"}`);
+    return translation;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
   const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
@@ -381,14 +423,31 @@ async function aiTranslate(text, srcLang, tgtLang) {
       // key is configured. Do not wait through Gemini overload retries when a
       // backup is available. Existing Gemini-only behavior remains unchanged
       // for deployments that have not configured GROQ_API_KEY.
+      const label = `${srcLang}->${tgtLang} (${text.length} chars)`;
+      let groqError = null;
+
       if (process.env.GROQ_API_KEY) {
         console.warn(`[AI_FAILOVER] Gemini unavailable for ${srcLang}->${tgtLang}; trying Groq.`);
         try {
-          return await callGroqTranslation(text, srcName, tgtName, `${srcLang}->${tgtLang} (${text.length} chars)`);
+          return await callGroqTranslation(text, srcName, tgtName, label);
         } catch (backupError) {
-          console.error(`[AI_FAILOVER_FAILED] Gemini and Groq unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
-          throw err;
+          groqError = backupError;
+          console.error(`[AI_FAILOVER_GROQ_FAILED] Groq unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
+      }
+
+      if (process.env.OPENROUTER_API_KEY) {
+        console.warn(`[AI_FAILOVER] Previous provider unavailable for ${srcLang}->${tgtLang}; trying OpenRouter free-model router.`);
+        try {
+          return await callOpenRouterTranslation(text, srcName, tgtName, label);
+        } catch (backupError) {
+          console.error(`[AI_FAILOVER_OPENROUTER_FAILED] OpenRouter unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+        }
+      }
+
+      if (process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY) {
+        console.error(`[AI_FAILOVER_FAILED] Gemini and configured backup providers unavailable for ${srcLang}->${tgtLang}`);
+        throw err;
       }
 
       if (!(err instanceof QuotaExceededError) || err.reason !== "overload" || attempt >= GEMINI_RETRY_DELAYS_MS.length) {
