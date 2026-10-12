@@ -1,3 +1,4 @@
+import "dotenv/config";
 import pg from "pg";
 import { randomBytes } from "node:crypto";
 import fs from "fs";
