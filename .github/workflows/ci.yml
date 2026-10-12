@@ -27,3 +27,33 @@ jobs:
           done
       - name: Validate package.json
         run: node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
+
+  migration-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bembahub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bembahub_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Test database migrations against PostgreSQL
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/bembahub_test
+          NODE_ENV: test
+        run: node scripts/test-migrations.js
