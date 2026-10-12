@@ -50,11 +50,53 @@ export async function importStarterDictionary(importedBy) {
 
 export async function initSchema() {
   const dir = path.join(__dirname, "migrations");
+
+  // Track completed migrations so a Neon/Render restart doesn't rerun
+  // table/index creation and data-cleanup statements on every boot.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      filename TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
   const files = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
   for (const f of files) {
-    const sql = fs.readFileSync(path.join(dir, f), "utf8");
-    await pool.query(sql);
-    console.log(`Migration applied: ${f}`);
+    const { rows: alreadyApplied } = await pool.query(
+      "SELECT 1 FROM schema_migrations WHERE filename=$1",
+      [f]
+    );
+    if (alreadyApplied.length) continue;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Serialize migration application if more than one service instance
+      // starts at once, then re-check after acquiring the transaction lock.
+      await client.query("SELECT pg_advisory_xact_lock(20261013, 1)");
+      const { rows: checkAgain } = await client.query(
+        "SELECT 1 FROM schema_migrations WHERE filename=$1",
+        [f]
+      );
+      if (checkAgain.length) {
+        await client.query("COMMIT");
+        continue;
+      }
+
+      const sql = fs.readFileSync(path.join(dir, f), "utf8");
+      await client.query(sql);
+      await client.query(
+        "INSERT INTO schema_migrations (filename) VALUES ($1)",
+        [f]
+      );
+      await client.query("COMMIT");
+      console.log(`Migration applied: ${f}`);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   const { rows: wc } = await pool.query("SELECT COUNT(*)::int AS n FROM words");
