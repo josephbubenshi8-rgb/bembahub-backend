@@ -27,17 +27,27 @@ ALTER TABLE words ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ NOT NULL DEF
 -- means under the new model, so this reclassifies real rows, it doesn't invent data.
 UPDATE words SET status = 'verified' WHERE status = 'approved';
 
--- Remove any pre-existing duplicate (en, bm) pairs, keeping the earliest row,
--- before enforcing uniqueness — required so the index below can be created.
-DELETE FROM words a USING words b
-WHERE a.id > b.id
-  AND LOWER(TRIM(a.en)) = LOWER(TRIM(b.en))
-  AND LOWER(TRIM(a.bm)) = LOWER(TRIM(b.bm));
+-- This migration originally ran before multilingual columns existed, so
+-- the global (en,bm) cleanup/index is valid only at that stage. On later boots
+-- the words table may contain identical text pairs in DIFFERENT language pairs;
+-- never delete those valid multilingual rows or recreate a global unique index.
+DO $
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'words'
+      AND column_name = 'source_lang'
+  ) THEN
+    DELETE FROM words a USING words b
+    WHERE a.id > b.id
+      AND LOWER(TRIM(a.en)) = LOWER(TRIM(b.en))
+      AND LOWER(TRIM(a.bm)) = LOWER(TRIM(b.bm));
 
--- Case/whitespace-insensitive uniqueness: the mechanism that makes "100 users
--- translate House -> Inzu" result in ONE row with usage_count = 100, not 100 rows.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_words_dedupe
-  ON words (LOWER(TRIM(en)), LOWER(TRIM(bm)));
+    EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS idx_words_dedupe
+      ON words (LOWER(TRIM(en)), LOWER(TRIM(bm)))';
+  END IF;
+END $;
 
 CREATE INDEX IF NOT EXISTS idx_words_status ON words (status);
 CREATE INDEX IF NOT EXISTS idx_words_usage  ON words (usage_count DESC);
