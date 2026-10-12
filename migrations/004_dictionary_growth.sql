@@ -31,7 +31,7 @@ UPDATE words SET status = 'verified' WHERE status = 'approved';
 -- the global (en,bm) cleanup/index is valid only at that stage. On later boots
 -- the words table may contain identical text pairs in DIFFERENT language pairs;
 -- never delete those valid multilingual rows or recreate a global unique index.
-DO $
+DO $bembahub$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
@@ -47,7 +47,7 @@ BEGIN
     EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS idx_words_dedupe
       ON words (LOWER(TRIM(en)), LOWER(TRIM(bm)))';
   END IF;
-END $;
+END $bembahub$;
 
 CREATE INDEX IF NOT EXISTS idx_words_status ON words (status);
 CREATE INDEX IF NOT EXISTS idx_words_usage  ON words (usage_count DESC);
