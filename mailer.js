@@ -13,9 +13,17 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
 
 export async function sendPasswordResetEmail(toEmail, resetUrl) {
   if (!transporter) {
-    // No SMTP configured — log so it's still usable in dev/testing.
-    console.log(`[password-reset] SMTP not configured. Reset link for ${toEmail}: ${resetUrl}`);
-    return { delivered: false, devLink: resetUrl };
+    // Never expose or log a reset token just because SMTP is missing.
+    // A developer must explicitly opt in to local-only reset-link output.
+    const allowDevResetLink =
+      process.env.NODE_ENV !== "production" &&
+      process.env.ALLOW_DEV_RESET_LINK === "true";
+    if (allowDevResetLink) {
+      console.log(`[password-reset] Development reset link for ${toEmail}: ${resetUrl}`);
+      return { delivered: false, devLink: resetUrl };
+    }
+    console.warn("[password-reset] SMTP is not configured; reset email was not delivered.");
+    return { delivered: false };
   }
   await transporter.sendMail({
     from: process.env.SMTP_FROM || `"BembaHub" <no-reply@bembahub.com>`,
