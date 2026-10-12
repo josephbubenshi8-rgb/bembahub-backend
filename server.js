@@ -225,7 +225,7 @@ app.post("/auth/forgot-password", rateLimit("forgot-password", 5, 60 * 60_000), 
     const token = await db.createPasswordReset(user.id);
     const resetUrl = `${FRONTEND_URL}/?resetToken=${token}`;
     const result = await sendPasswordResetEmail(user.email, resetUrl);
-    if (!result.delivered && process.env.NODE_ENV !== "production") {
+    if (!result.delivered && result.devLink) {
       return res.json({ success: true, devLink: result.devLink });
     }
   }
