@@ -637,9 +637,85 @@ async function aiTranslate(text, srcLang, tgtLang) {
   const hintBlock = dictionaryHints.length
     ? `\n\nVerified dictionary terminology guidance (use only where contextually appropriate; preserve natural grammar):\n${dictionaryHints.map((h) => `${h.source} = ${h.target}`).join("\n")}\nTranslate ONLY the original source text, not this guidance.`
     : "";
-  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}${hintBlock}`;
+  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`${hintBlock}`;
 
   for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await callGemini(
+        () => ai.models.generateContent({ model: "gemini-flash-latest", contents: prompt }),
+        `translate ${srcLang}->${tgtLang} (${text.length} chars)`
+      );
+      const translation = requireUsableTranslation(text, response.text, "Gemini");
+      return translation;
+    } catch (err) {
+      // Automatic translation failover: only activate Groq when its server-side
+      // key is configured. Do not wait through Gemini overload retries when a
+      // backup is available. Existing Gemini-only behavior remains unchanged
+      // for deployments without configured backup-provider keys.
+      const label = `${srcLang}->${tgtLang} (${text.length} chars)`;
+      if (process.env.GROQ_API_KEY) {
+        console.warn(`[AI_FAILOVER] Gemini unavailable for ${srcLang}->${tgtLang}; trying Groq.`);
+        try {
+          return requireUsableTranslation(text, await callGroqTranslation(text, srcName, tgtName, label, dictionaryHints), "Groq");
+        } catch (backupError) {
+          console.error(`[AI_FAILOVER_GROQ_FAILED] Groq unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+        }
+      }
+
+      if (process.env.OPENROUTER_API_KEY) {
+        console.warn(`[AI_FAILOVER] Previous provider unavailable for ${srcLang}->${tgtLang}; trying OpenRouter free-model router.`);
+        try {
+          return requireUsableTranslation(text, await callOpenRouterTranslation(text, srcName, tgtName, label, dictionaryHints), "OpenRouter");
+        } catch (backupError) {
+          console.error(`[AI_FAILOVER_OPENROUTER_FAILED] OpenRouter unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+        }
+      }
+
+      if (process.env.MISTRAL_API_KEY) {
+        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Mistral.`);
+        try {
+          return requireUsableTranslation(text, await callMistralTranslation(text, srcName, tgtName, label, dictionaryHints), "Mistral");
+        } catch (backupError) {
+          console.error(`[AI_FAILOVER_MISTRAL_FAILED] Mistral unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+        }
+      }
+
+      if (process.env.HF_TOKEN) {
+        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Hugging Face Inference Providers.`);
+        try {
+          return requireUsableTranslation(text, await callHuggingFaceTranslation(text, srcName, tgtName, label, dictionaryHints), "Hugging Face");
+        } catch (backupError) {
+          console.error(`[AI_FAILOVER_HUGGINGFACE_FAILED] Hugging Face Inference Providers unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+        }
+      }
+
+      if (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN) {
+        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Cloudflare Workers AI.`);
+        try {
+          return requireUsableTranslation(text, await callCloudflareWorkersAITranslation(text, srcName, tgtName, label, dictionaryHints), "Cloudflare Workers AI");
+        } catch (backupError) {
+          console.error(`[AI_FAILOVER_CLOUDFLARE_AI_FAILED] Cloudflare Workers AI unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+        }
+      }
+
+      if (process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY || process.env.MISTRAL_API_KEY || process.env.HF_TOKEN || (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN)) {
+        console.error(`[AI_FAILOVER_FAILED] Gemini and configured backup providers unavailable for ${srcLang}->${tgtLang}`);
+        throw err;
+      }
+
+      if (!(err instanceof QuotaExceededError) || err.reason !== "overload" || attempt >= GEMINI_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+      const delay = Math.max(
+        GEMINI_RETRY_DELAYS_MS[attempt],
+        (err.retryAfterSeconds || OVERLOAD_COOLDOWN_SECONDS) * 1000 + 250
+      );
+      console.log(`[GEMINI_RETRY] ${srcLang}->${tgtLang} attempt ${attempt + 1} after ${delay}ms`);
+      await sleep(delay);
+    }
+  }
+}
+
 async function translateLongText(text, sourceLang, targetLang) {
   const chunks = splitTranslationText(text, LONG_TRANSLATION_CHUNK_CHARS);
   if (chunks.length === 1) return null;
