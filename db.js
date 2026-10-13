@@ -261,6 +261,9 @@ export async function getWordById(id) {
 export async function findDictionaryHints(text, sourceLang, targetLang) {
   const sourceText = String(text || "").trim();
   if (!sourceText || !isValidLang(sourceLang) || !isValidLang(targetLang)) return [];
+  // The words table stores dictionary terms in English and Bemba columns only.
+  // Do not mislabel Bemba entries as other languages for unrelated language pairs.
+  if (!((sourceLang === "eng" && targetLang === "bem") || (sourceLang === "bem" && targetLang === "eng"))) return [];
   const sourceColumn = sourceLang === "eng" ? "en" : "bm";
   const targetColumn = sourceLang === "eng" ? "bm" : "en";
   const sql = "SELECT " + sourceColumn + " AS source_term, " + targetColumn + " AS target_term " +
