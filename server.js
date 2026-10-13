@@ -662,19 +662,28 @@ async function translateLongText(text, sourceLang, targetLang) {
     const chunk = chunks[i];
     const memoryHit = await db.findTranslationMemory(chunk, sourceLang, targetLang);
     if (memoryHit?.translation) {
-      translated.push(memoryHit.translation);
-      console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
-      continue;
+      if (hasSevereRepetition(chunk, memoryHit.translation)) {
+        console.warn(`[LONG_TRANSLATION_MEMORY_QUALITY_REJECTED] section=${i + 1}/${chunks.length}; suspicious saved output ignored`);
+        await db.deleteTranslationMemory(chunk, sourceLang, targetLang);
+      } else {
+        translated.push(memoryHit.translation);
+        console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
+        continue;
+      }
     }
 
     const chunkHit = await db.findWordMatch(chunk, sourceLang, targetLang);
-    if (chunkHit?.translation) {
+    if (chunkHit?.translation && !hasSevereRepetition(chunk, chunkHit.translation)) {
       translated.push(chunkHit.translation);
       console.log(`[LONG_TRANSLATION_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
       continue;
     }
 
-    const result = await aiTranslate(chunk, sourceLang, targetLang);
+    const result = requireUsableTranslation(
+      chunk,
+      await aiTranslate(chunk, sourceLang, targetLang),
+      "long-page section"
+    );
     if (!result) throw new Error("Empty translation returned for page section " + (i + 1));
 
     translated.push(result);
