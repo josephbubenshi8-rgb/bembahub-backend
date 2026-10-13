@@ -442,7 +442,7 @@ async function callGroqTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `Translate text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.`,
+            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -484,7 +484,7 @@ async function callOpenRouterTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `Translate text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.`,
+            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -524,7 +524,7 @@ async function callMistralTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `Translate text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.`,
+            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -565,7 +565,7 @@ async function callHuggingFaceTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `Translate text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.`,
+            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
