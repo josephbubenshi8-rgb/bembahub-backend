@@ -249,6 +249,10 @@ app.post("/auth/reset-password", asyncRoute(async (req, res) => {
    shape; new callers should send {text, sourceLang, targetLang}.
 ══════════════════════════════════════════ */
 const LONG_TRANSLATION_CHARS = 6500;
+// Keep each AI request comfortably below provider output-token and timeout limits.
+// The 6500-character threshold still decides when page mode is used; this
+// smaller size is only the per-request chunk limit for long documents.
+const LONG_TRANSLATION_CHUNK_CHARS = 2500;
 const GEMINI_RETRY_DELAYS_MS = [7000, 14000, 28000];
 
 function sleep(ms) {
@@ -703,7 +707,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
 }
 
 async function translateLongText(text, sourceLang, targetLang) {
-  const chunks = splitTranslationText(text);
+  const chunks = splitTranslationText(text, LONG_TRANSLATION_CHUNK_CHARS);
   if (chunks.length === 1) return null;
 
   console.log(`[LONG_TRANSLATION_START] ${sourceLang}->${targetLang} chunks=${chunks.length} chars=${text.length}`);
