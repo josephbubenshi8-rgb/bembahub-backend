@@ -326,6 +326,18 @@ export async function findTranslationMemory(text, sourceLang, targetLang) {
   };
 }
 
+export async function deleteTranslationMemory(sourceText, sourceLang, targetLang) {
+  const clean = (sourceText || "").trim();
+  const key = normalizeMemoryText(clean);
+  if (!key || !isValidLang(sourceLang) || !isValidLang(targetLang)) return false;
+  const { rowCount } = await pool.query(
+    `DELETE FROM translation_memory
+     WHERE source_lang=$1 AND target_lang=$2 AND source_text_key=$3`,
+    [sourceLang, targetLang, key]
+  );
+  return rowCount > 0;
+}
+
 export async function recordTranslationMemory({
   sourceText, targetText, sourceLang, targetLang, source, userId
 }) {
