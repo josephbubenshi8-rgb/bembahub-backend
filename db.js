@@ -290,24 +290,6 @@ export async function findDictionaryHints(text, sourceLang, targetLang) {
 }
 
 // Looks up an existing translation for a specific language pair. Checks
-  const seen = new Set();
-  const hints = [];
-  for (const row of rows) {
-    const sourceTerm = String(row.source_term || "").trim();
-    const targetTerm = String(row.target_term || "").trim();
-    if (!sourceTerm || !targetTerm) continue;
-    const key = sourceTerm.toLocaleLowerCase();
-    if (seen.has(key)) continue;
-    const pattern = new RegExp(\`(^|[^\\\\p{L}\\\\p{N}])\${escapeRegex(sourceTerm)}(?=$|[^\\\\p{L}\\\\p{N}])\`, "iu");
-    if (!pattern.test(sourceText)) continue;
-    seen.add(key);
-    hints.push({ source: sourceTerm, target: targetTerm });
-    if (hints.length >= 20) break;
-  }
-  return hints;
-}
-
-// Looks up an existing translation for a specific language pair. Checks
 // verified first, then unverified (reusing an AI result already generated
 // for this exact phrase saves an API call and is how usage_count climbs),
 // then a partial/fuzzy verified match. Never matches a 'rejected' entry.
