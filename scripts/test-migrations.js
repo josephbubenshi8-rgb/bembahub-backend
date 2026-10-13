@@ -30,14 +30,13 @@ async function main() {
   // Exercise the real database-backed dictionary-hint function, not a copied
   // implementation. These rows are deliberately unique to this test.
   const hintRows = [
-    ["BembaHub hint test water", "amenshi"],
-    ["BembaHub hint test drinking water", "amenshi yakumwa"],
-    ["BembaHub hint test cat", "kase"],
+    ["drinking water", "amenshi yakumwa"],
+    ["purple cat", "kase ya purupulu"],
   ];
   for (const [en, bm] of hintRows) {
     await pool.query(
       "INSERT INTO words (en,bm,source_lang,target_lang,status,contrib) VALUES ($1,$2,'eng','bem','verified','dictionary-hint-test')",
-      [en.replace("BembaHub hint test ", ""), bm]
+      [en, bm]
     );
   }
 
@@ -55,7 +54,7 @@ async function main() {
       phraseHints.findIndex((hint) => hint.source.toLowerCase() === "water"),
     "longer phrases should be returned before their shorter contained terms"
   );
-  assert(!phraseHints.some((hint) => hint.source.toLowerCase() === "cat"),
+  assert(!phraseHints.some((hint) => hint.source.toLowerCase() === "purple cat"),
     "unrelated dictionary terms must not be included");
 
   const boundaryHints = await findDictionaryHints("The watermelon is ripe.", "eng", "bem");
