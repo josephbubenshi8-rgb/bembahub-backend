@@ -256,6 +256,42 @@ export async function getWordById(id) {
   return rows[0] || null;
 }
 
+// Finds verified dictionary terms and phrases present in a source passage.
+// These are contextual guidance for the AI, never mechanical replacements.
+export async function findDictionaryHints(text, sourceLang, targetLang) {
+  const sourceText = String(text || "").trim();
+  if (!sourceText || !isValidLang(sourceLang) || !isValidLang(targetLang)) return [];
+  // The words table stores dictionary terms in English and Bemba columns only.
+  // Do not mislabel Bemba entries as other languages for unrelated language pairs.
+  if (!((sourceLang === "eng" && targetLang === "bem") || (sourceLang === "bem" && targetLang === "eng"))) return [];
+  const sourceColumn = sourceLang === "eng" ? "en" : "bm";
+  const targetColumn = sourceLang === "eng" ? "bm" : "en";
+  const sql = "SELECT " + sourceColumn + " AS source_term, " + targetColumn + " AS target_term " +
+    "FROM words WHERE status='verified' AND source_lang=$2 AND target_lang=$3 " +
+    "AND COALESCE(BTRIM(" + sourceColumn + "), '') <> '' " +
+    "AND COALESCE(BTRIM(" + targetColumn + "), '') <> '' " +
+    "AND CHAR_LENGTH(BTRIM(" + sourceColumn + ")) >= 3 " +
+    "AND LOWER($1) LIKE '%' || LOWER(BTRIM(" + sourceColumn + ")) || '%' " +
+    "ORDER BY CHAR_LENGTH(BTRIM(" + sourceColumn + ")) DESC LIMIT 150";
+  const { rows } = await pool.query(sql, [sourceText, sourceLang, targetLang]);
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const seen = new Set();
+  const hints = [];
+  for (const row of rows) {
+    const sourceTerm = String(row.source_term || "").trim();
+    const targetTerm = String(row.target_term || "").trim();
+    if (!sourceTerm || !targetTerm) continue;
+    const key = sourceTerm.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    const pattern = new RegExp('(^|[^\\p{L}\\p{N}])' + escapeRegex(sourceTerm) + '(?=$|[^\\p{L}\\p{N}])', 'iu');
+    if (!pattern.test(sourceText)) continue;
+    seen.add(key);
+    hints.push({ source: sourceTerm, target: targetTerm });
+    if (hints.length >= 20) break;
+  }
+  return hints;
+}
+
 // Looks up an existing translation for a specific language pair. Checks
 // verified first, then unverified (reusing an AI result already generated
 // for this exact phrase saves an API call and is how usage_count climbs),

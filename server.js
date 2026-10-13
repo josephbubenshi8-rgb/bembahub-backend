@@ -423,7 +423,7 @@ function requireUsableTranslation(sourceText, translatedText, provider) {
   }
   return clean;
 }
-async function callGroqTranslation(text, sourceName, targetName, label) {
+async function callGroqTranslation(text, sourceName, targetName, label, dictionaryHints = []) {
   if (!process.env.GROQ_API_KEY) throw new Error("Groq backup provider is not configured.");
 
   const controller = new AbortController();
@@ -442,7 +442,7 @@ async function callGroqTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
+            content: `You are a careful translator for BembaHub. ${dictionaryHints.length ? "Use these verified dictionary entries as contextual terminology guidance where they fit naturally; do not mechanically substitute words or override grammar/context. Entries: " + dictionaryHints.map((h) => h.source + " → " + h.target).join("; ") + ". " : ""}Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -464,7 +464,7 @@ async function callGroqTranslation(text, sourceName, targetName, label) {
   }
 }
 
-async function callOpenRouterTranslation(text, sourceName, targetName, label) {
+async function callOpenRouterTranslation(text, sourceName, targetName, label, dictionaryHints = []) {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("OpenRouter backup provider is not configured.");
 
   const controller = new AbortController();
@@ -484,7 +484,7 @@ async function callOpenRouterTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
+            content: `You are a careful translator for BembaHub. ${dictionaryHints.length ? "Use these verified dictionary entries as contextual terminology guidance where they fit naturally; do not mechanically substitute words or override grammar/context. Entries: " + dictionaryHints.map((h) => h.source + " → " + h.target).join("; ") + ". " : ""}Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -506,7 +506,7 @@ async function callOpenRouterTranslation(text, sourceName, targetName, label) {
   }
 }
 
-async function callMistralTranslation(text, sourceName, targetName, label) {
+async function callMistralTranslation(text, sourceName, targetName, label, dictionaryHints = []) {
   if (!process.env.MISTRAL_API_KEY) throw new Error("Mistral backup provider is not configured.");
 
   const controller = new AbortController();
@@ -524,7 +524,7 @@ async function callMistralTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
+            content: `You are a careful translator for BembaHub. ${dictionaryHints.length ? "Use these verified dictionary entries as contextual terminology guidance where they fit naturally; do not mechanically substitute words or override grammar/context. Entries: " + dictionaryHints.map((h) => h.source + " → " + h.target).join("; ") + ". " : ""}Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -546,7 +546,7 @@ async function callMistralTranslation(text, sourceName, targetName, label) {
   }
 }
 
-async function callHuggingFaceTranslation(text, sourceName, targetName, label) {
+async function callHuggingFaceTranslation(text, sourceName, targetName, label, dictionaryHints = []) {
   if (!process.env.HF_TOKEN) throw new Error("Hugging Face Inference Providers backup is not configured.");
 
   const controller = new AbortController();
@@ -565,7 +565,7 @@ async function callHuggingFaceTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
+            content: `You are a careful translator for BembaHub. ${dictionaryHints.length ? "Use these verified dictionary entries as contextual terminology guidance where they fit naturally; do not mechanically substitute words or override grammar/context. Entries: " + dictionaryHints.map((h) => h.source + " → " + h.target).join("; ") + ". " : ""}Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -587,7 +587,7 @@ async function callHuggingFaceTranslation(text, sourceName, targetName, label) {
   }
 }
 
-async function callCloudflareWorkersAITranslation(text, sourceName, targetName, label) {
+async function callCloudflareWorkersAITranslation(text, sourceName, targetName, label, dictionaryHints = []) {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
   if (!accountId || !apiToken) throw new Error("Cloudflare Workers AI backup is not configured.");
@@ -603,7 +603,7 @@ async function callCloudflareWorkersAITranslation(text, sourceName, targetName, 
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        prompt: `Translate the following text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.\n\n${text}`,
+        prompt: `Translate the following text from ${sourceName} into natural ${targetName}. Preserve meaning, names, tone, and paragraph breaks. Return only the translation, with no explanation.\n\n${dictionaryHints.length ? "Verified dictionary terminology guidance (use naturally, do not mechanically substitute):\n" + dictionaryHints.map((h) => h.source + " = " + h.target).join("\n") + "\n\n" : ""}Original text to translate:\n${text}`,
         max_tokens: 2048,
       }),
       signal: controller.signal,
@@ -627,7 +627,17 @@ async function callCloudflareWorkersAITranslation(text, sourceName, targetName, 
 
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
-  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
+  let dictionaryHints = [];
+  try {
+    dictionaryHints = await db.findDictionaryHints(text, srcLang, tgtLang);
+  } catch (err) {
+    // Dictionary guidance is an optimization; a lookup failure must not block AI translation.
+    console.warn(`[DICTIONARY_HINT_LOOKUP_FAILED] ${srcLang}->${tgtLang}`);
+  }
+  const hintBlock = dictionaryHints.length
+    ? `\n\nVerified dictionary terminology guidance (use only where contextually appropriate; preserve natural grammar):\n${dictionaryHints.map((h) => `${h.source} = ${h.target}`).join("\n")}\nTranslate ONLY the original source text, not this guidance.`
+    : "";
+  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}${hintBlock}`;
 
   for (let attempt = 0; ; attempt++) {
     try {
@@ -646,7 +656,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.GROQ_API_KEY) {
         console.warn(`[AI_FAILOVER] Gemini unavailable for ${srcLang}->${tgtLang}; trying Groq.`);
         try {
-          return requireUsableTranslation(text, await callGroqTranslation(text, srcName, tgtName, label), "Groq");
+          return requireUsableTranslation(text, await callGroqTranslation(text, srcName, tgtName, label, dictionaryHints), "Groq");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_GROQ_FAILED] Groq unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -655,7 +665,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.OPENROUTER_API_KEY) {
         console.warn(`[AI_FAILOVER] Previous provider unavailable for ${srcLang}->${tgtLang}; trying OpenRouter free-model router.`);
         try {
-          return requireUsableTranslation(text, await callOpenRouterTranslation(text, srcName, tgtName, label), "OpenRouter");
+          return requireUsableTranslation(text, await callOpenRouterTranslation(text, srcName, tgtName, label, dictionaryHints), "OpenRouter");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_OPENROUTER_FAILED] OpenRouter unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -664,7 +674,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.MISTRAL_API_KEY) {
         console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Mistral.`);
         try {
-          return requireUsableTranslation(text, await callMistralTranslation(text, srcName, tgtName, label), "Mistral");
+          return requireUsableTranslation(text, await callMistralTranslation(text, srcName, tgtName, label, dictionaryHints), "Mistral");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_MISTRAL_FAILED] Mistral unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -673,7 +683,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.HF_TOKEN) {
         console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Hugging Face Inference Providers.`);
         try {
-          return requireUsableTranslation(text, await callHuggingFaceTranslation(text, srcName, tgtName, label), "Hugging Face");
+          return requireUsableTranslation(text, await callHuggingFaceTranslation(text, srcName, tgtName, label, dictionaryHints), "Hugging Face");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_HUGGINGFACE_FAILED] Hugging Face Inference Providers unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -682,7 +692,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN) {
         console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Cloudflare Workers AI.`);
         try {
-          return requireUsableTranslation(text, await callCloudflareWorkersAITranslation(text, srcName, tgtName, label), "Cloudflare Workers AI");
+          return requireUsableTranslation(text, await callCloudflareWorkersAITranslation(text, srcName, tgtName, label, dictionaryHints), "Cloudflare Workers AI");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_CLOUDFLARE_AI_FAILED] Cloudflare Workers AI unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
