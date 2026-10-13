@@ -338,7 +338,7 @@ function splitTranslationText(text, maxChars = LONG_TRANSLATION_CHARS) {
 function hasSevereRepetition(sourceText, translatedText) {
   const tokenize = (value) => String(value || "").toLowerCase()
     .normalize("NFKC")
-    .match(/[\\p{L}\\p{N}’'-]+/gu) || [];
+    .match(/[\p{L}\p{N}’'-]+/gu) || [];
   const sourceTokens = tokenize(sourceText);
   const targetTokens = tokenize(translatedText);
   if (targetTokens.length < 12) return false;
