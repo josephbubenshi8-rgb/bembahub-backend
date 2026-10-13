@@ -329,6 +329,45 @@ function splitTranslationText(text, maxChars = LONG_TRANSLATION_CHARS) {
 
   return chunks.length ? chunks : [normalized];
 }
+
+/**
+ * Guard against provider/cache corruption such as a single word repeated
+ * throughout an otherwise normal translation. This is a quality guard, not
+ * a claim that valid translations can be automatically judged for accuracy.
+ */
+function hasSevereRepetition(sourceText, translatedText) {
+  const tokenize = (value) => String(value || "").toLowerCase()
+    .normalize("NFKC")
+    .match(/[\\p{L}\\p{N}’'-]+/gu) || [];
+  const sourceTokens = tokenize(sourceText);
+  const targetTokens = tokenize(translatedText);
+  if (targetTokens.length < 12) return false;
+
+  const counts = new Map();
+  for (const token of targetTokens) counts.set(token, (counts.get(token) || 0) + 1);
+  const sourceCounts = new Map();
+  for (const token of sourceTokens) sourceCounts.set(token, (sourceCounts.get(token) || 0) + 1);
+
+  for (const [token, count] of counts) {
+    // Only flag extreme repetition that is not also present in the source.
+    if (count >= 8 && count / targetTokens.length >= 0.2 &&
+        (sourceCounts.get(token) || 0) < Math.max(3, Math.floor(count / 2))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function requireUsableTranslation(sourceText, translatedText, provider) {
+  const clean = String(translatedText || "").trim();
+  if (!clean) throw new Error(`${provider} returned an empty translation.`);
+  if (hasSevereRepetition(sourceText, clean)) {
+    console.warn(`[TRANSLATION_QUALITY_REJECTED] provider=${provider}; severe repeated-token output detected`);
+    throw new Error(`${provider} returned a suspiciously repetitive translation.`);
+  }
+  return clean;
+}
+
 async function callGroqTranslation(text, sourceName, targetName, label) {
   if (!process.env.GROQ_API_KEY) throw new Error("Groq backup provider is not configured.");
 
@@ -541,8 +580,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
         () => ai.models.generateContent({ model: "gemini-flash-latest", contents: prompt }),
         `translate ${srcLang}->${tgtLang} (${text.length} chars)`
       );
-      const translation = (response.text || "").trim();
-      if (!translation) throw new Error("Gemini returned an empty translation.");
+      const translation = requireUsableTranslation(text, response.text, "Gemini");
       return translation;
     } catch (err) {
       // Automatic translation failover: only activate Groq when its server-side
@@ -553,7 +591,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.GROQ_API_KEY) {
         console.warn(`[AI_FAILOVER] Gemini unavailable for ${srcLang}->${tgtLang}; trying Groq.`);
         try {
-          return await callGroqTranslation(text, srcName, tgtName, label);
+          return requireUsableTranslation(text, await callGroqTranslation(text, srcName, tgtName, label), "Groq");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_GROQ_FAILED] Groq unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -562,7 +600,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.OPENROUTER_API_KEY) {
         console.warn(`[AI_FAILOVER] Previous provider unavailable for ${srcLang}->${tgtLang}; trying OpenRouter free-model router.`);
         try {
-          return await callOpenRouterTranslation(text, srcName, tgtName, label);
+          return requireUsableTranslation(text, await callOpenRouterTranslation(text, srcName, tgtName, label), "OpenRouter");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_OPENROUTER_FAILED] OpenRouter unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -571,7 +609,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.MISTRAL_API_KEY) {
         console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Mistral.`);
         try {
-          return await callMistralTranslation(text, srcName, tgtName, label);
+          return requireUsableTranslation(text, await callMistralTranslation(text, srcName, tgtName, label), "Mistral");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_MISTRAL_FAILED] Mistral unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -580,7 +618,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.HF_TOKEN) {
         console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Hugging Face Inference Providers.`);
         try {
-          return await callHuggingFaceTranslation(text, srcName, tgtName, label);
+          return requireUsableTranslation(text, await callHuggingFaceTranslation(text, srcName, tgtName, label), "Hugging Face");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_HUGGINGFACE_FAILED] Hugging Face Inference Providers unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -589,7 +627,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
       if (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN) {
         console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Cloudflare Workers AI.`);
         try {
-          return await callCloudflareWorkersAITranslation(text, srcName, tgtName, label);
+          return requireUsableTranslation(text, await callCloudflareWorkersAITranslation(text, srcName, tgtName, label), "Cloudflare Workers AI");
         } catch (backupError) {
           console.error(`[AI_FAILOVER_CLOUDFLARE_AI_FAILED] Cloudflare Workers AI unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
         }
@@ -673,8 +711,13 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   // stores complete sentences, paragraphs and page-sized translations.
   const memoryHit = await db.findTranslationMemory(text, sourceLang, targetLang);
   if (memoryHit) {
-    console.log(`[TRANSLATION_MEMORY_HIT] ${sourceLang}->${targetLang}`);
-    return res.json(memoryHit);
+    if (hasSevereRepetition(text, memoryHit.translation)) {
+      console.warn(`[TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; suspicious saved output ignored`);
+      await db.deleteTranslationMemory(text, sourceLang, targetLang);
+    } else {
+      console.log(`[TRANSLATION_MEMORY_HIT] ${sourceLang}->${targetLang}`);
+      return res.json(memoryHit);
+    }
   }
 
   if (text.length > LONG_TRANSLATION_CHARS) {
