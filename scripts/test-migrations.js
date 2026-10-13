@@ -50,6 +50,11 @@ async function main() {
     "a complete multiword phrase should be found");
   assert(phraseHints.some((hint) => hint.source.toLowerCase() === "water"),
     "the individual word should also be found when present as a separate word");
+  assert(
+    phraseHints.findIndex((hint) => hint.source.toLowerCase() === "drinking water") <
+      phraseHints.findIndex((hint) => hint.source.toLowerCase() === "water"),
+    "longer phrases should be returned before their shorter contained terms"
+  );
   assert(!phraseHints.some((hint) => hint.source.toLowerCase() === "cat"),
     "unrelated dictionary terms must not be included");
 
