@@ -348,11 +348,35 @@ function hasSevereRepetition(sourceText, translatedText) {
   const sourceCounts = new Map();
   for (const token of sourceTokens) sourceCounts.set(token, (sourceCounts.get(token) || 0) + 1);
 
+  // Catch a single token dominating the output, unless that repetition is
+  // already present in the source text.
   for (const [token, count] of counts) {
-    // Only flag extreme repetition that is not also present in the source.
     if (count >= 8 && count / targetTokens.length >= 0.2 &&
         (sourceCounts.get(token) || 0) < Math.max(3, Math.floor(count / 2))) {
       return true;
+    }
+  }
+
+  // Some corrupt translations repeat a short phrase rather than one word
+  // (for example, the same 4–5 word phrase dozens of times in a long page).
+  // Compare n-gram frequencies against the source so legitimate source
+  // repetition is less likely to trigger the guard.
+  for (const size of [5, 4]) {
+    if (targetTokens.length < size * 3) continue;
+    const targetPhrases = new Map();
+    const sourcePhrases = new Map();
+    const countPhrases = (tokens, map) => {
+      for (let i = 0; i <= tokens.length - size; i++) {
+        const phrase = tokens.slice(i, i + size).join(" ");
+        map.set(phrase, (map.get(phrase) || 0) + 1);
+      }
+    };
+    countPhrases(targetTokens, targetPhrases);
+    countPhrases(sourceTokens, sourcePhrases);
+    const minRepeats = size === 5 ? 4 : 5;
+    for (const [phrase, count] of targetPhrases) {
+      const sourceCount = sourcePhrases.get(phrase) || 0;
+      if (count >= minRepeats && sourceCount < Math.max(2, Math.floor(count / 2))) return true;
     }
   }
   return false;
@@ -662,16 +686,25 @@ async function translateLongText(text, sourceLang, targetLang) {
     const chunk = chunks[i];
     const memoryHit = await db.findTranslationMemory(chunk, sourceLang, targetLang);
     if (memoryHit?.translation) {
-      translated.push(memoryHit.translation);
-      console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
-      continue;
+      if (hasSevereRepetition(chunk, memoryHit.translation)) {
+        console.warn(`[LONG_TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
+        await db.deleteTranslationMemory(chunk, sourceLang, targetLang);
+      } else {
+        translated.push(memoryHit.translation);
+        console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
+        continue;
+      }
     }
 
     const chunkHit = await db.findWordMatch(chunk, sourceLang, targetLang);
     if (chunkHit?.translation) {
-      translated.push(chunkHit.translation);
-      console.log(`[LONG_TRANSLATION_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
-      continue;
+      if (hasSevereRepetition(chunk, chunkHit.translation)) {
+        console.warn(`[LONG_TRANSLATION_DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
+      } else {
+        translated.push(chunkHit.translation);
+        console.log(`[LONG_TRANSLATION_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
+        continue;
+      }
     }
 
     const result = await aiTranslate(chunk, sourceLang, targetLang);
@@ -724,6 +757,10 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
     try {
       const pageTranslation = await translateLongText(text, sourceLang, targetLang);
       if (pageTranslation) {
+        // Validate the complete assembled page as a final safety net. If any
+        // cache/provider chunk slipped through, return a clean error instead
+        // of presenting clearly corrupted text as a successful translation.
+        requireUsableTranslation(text, pageTranslation, "assembled long-page translation");
         db.recordTranslationUsage({
           en: text.trim(), bm: pageTranslation, sourceLang, targetLang,
           source: "ai_long_page", userId: req.user ? req.user.id : null
