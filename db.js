@@ -271,7 +271,7 @@ export async function findDictionaryHints(text, sourceLang, targetLang) {
     "AND LOWER($1) LIKE '%' || LOWER(BTRIM(" + sourceColumn + ")) || '%' " +
     "ORDER BY CHAR_LENGTH(BTRIM(" + sourceColumn + ")) DESC LIMIT 150";
   const { rows } = await pool.query(sql, [sourceText, sourceLang, targetLang]);
-  const escapeRegex = (value) => value.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const seen = new Set();
   const hints = [];
   for (const row of rows) {
@@ -289,7 +289,7 @@ export async function findDictionaryHints(text, sourceLang, targetLang) {
   return hints;
 }
 
-// Looks up an existing translation for a specific language pair. Checks");
+// Looks up an existing translation for a specific language pair. Checks
   const seen = new Set();
   const hints = [];
   for (const row of rows) {
