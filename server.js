@@ -637,7 +637,7 @@ async function aiTranslate(text, srcLang, tgtLang) {
   const hintBlock = dictionaryHints.length
     ? `\n\nVerified dictionary terminology guidance (use only where contextually appropriate; preserve natural grammar):\n${dictionaryHints.map((h) => `${h.source} = ${h.target}`).join("\n")}\nTranslate ONLY the original source text, not this guidance.`
     : "";
-  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`${hintBlock}`;
+  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}${hintBlock}`;
 
   for (let attempt = 0; ; attempt++) {
     try {
