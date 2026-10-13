@@ -390,7 +390,13 @@ function requireUsableTranslation(sourceText, translatedText, provider) {
   const normalizeForComparison = (value) => String(value || '').normalize('NFKC').toLowerCase().replace(/[\p{P}\p{S}\s]+/gu, ' ').trim();
   const sourceNormalized = normalizeForComparison(sourceText);
   const targetNormalized = normalizeForComparison(clean);
-  if (sourceNormalized.length >= 160 && sourceNormalized === targetNormalized) {
+  // Exact source copies are not valid translations across different language
+  // codes. Keep a small allowance for single-word names/cognates, but reject
+  // unchanged phrases too; the previous long-text-only check let short English
+  // sentences be returned as successful English-to-Bemba translations.
+  const sourceWordCount = sourceNormalized ? sourceNormalized.split(/\\s+/u).length : 0;
+  if (sourceNormalized === targetNormalized &&
+      (sourceNormalized.length >= 12 || sourceWordCount >= 3)) {
     console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; output identical to source');
     throw new Error(provider + ' returned the source text without translating it.');
   }
@@ -859,6 +865,9 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
       }
     }
     if (!translation) return res.status(404).json({ error: "Word not found." });
+    // Validate the final result against the original input as well as each AI
+    // hop. This catches cross-language bridge results that are unchanged.
+    translation = requireUsableTranslation(text, translation, "final translation");
     db.recordTranslationUsage({ en: text.trim(), bm: translation, sourceLang, targetLang, source: "ai", userId: req.user ? req.user.id : null })
       .catch((e) => console.error("[dictionary-save]", e));
     db.recordTranslationMemory({
