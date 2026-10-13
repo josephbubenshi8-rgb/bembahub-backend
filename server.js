@@ -373,7 +373,9 @@ function hasSevereRepetition(sourceText, translatedText) {
     };
     countPhrases(targetTokens, targetPhrases);
     countPhrases(sourceTokens, sourcePhrases);
-    const minRepeats = size === 5 ? 4 : 5;
+    // Keep phrase detection conservative to reduce false positives in
+    // naturally repetitive religious, legal, or instructional writing.
+    const minRepeats = size === 5 ? 6 : 8;
     for (const [phrase, count] of targetPhrases) {
       const sourceCount = sourcePhrases.get(phrase) || 0;
       if (count >= minRepeats && sourceCount < Math.max(2, Math.floor(count / 2))) return true;
