@@ -348,26 +348,77 @@ function hasSevereRepetition(sourceText, translatedText) {
   const sourceCounts = new Map();
   for (const token of sourceTokens) sourceCounts.set(token, (sourceCounts.get(token) || 0) + 1);
 
+  // Catch a single token dominating the output, unless that repetition is
+  // already present in the source text.
   for (const [token, count] of counts) {
-    // Only flag extreme repetition that is not also present in the source.
     if (count >= 8 && count / targetTokens.length >= 0.2 &&
         (sourceCounts.get(token) || 0) < Math.max(3, Math.floor(count / 2))) {
       return true;
+    }
+  }
+
+  // Some corrupt translations repeat a short phrase rather than one word
+  // (for example, the same 4–5 word phrase dozens of times in a long page).
+  // Compare n-gram frequencies against the source so legitimate source
+  // repetition is less likely to trigger the guard.
+  for (const size of [5, 4]) {
+    if (targetTokens.length < size * 3) continue;
+    const targetPhrases = new Map();
+    const sourcePhrases = new Map();
+    const countPhrases = (tokens, map) => {
+      for (let i = 0; i <= tokens.length - size; i++) {
+        const phrase = tokens.slice(i, i + size).join(" ");
+        map.set(phrase, (map.get(phrase) || 0) + 1);
+      }
+    };
+    countPhrases(targetTokens, targetPhrases);
+    countPhrases(sourceTokens, sourcePhrases);
+    // Keep phrase detection conservative to reduce false positives in
+    // naturally repetitive religious, legal, or instructional writing.
+    const minRepeats = size === 5 ? 6 : 8;
+    for (const [phrase, count] of targetPhrases) {
+      const sourceCount = sourcePhrases.get(phrase) || 0;
+      if (count >= minRepeats && sourceCount < Math.max(2, Math.floor(count / 2))) return true;
     }
   }
   return false;
 }
 
 function requireUsableTranslation(sourceText, translatedText, provider) {
-  const clean = String(translatedText || "").trim();
-  if (!clean) throw new Error(`${provider} returned an empty translation.`);
+  const clean = String(translatedText || '').trim();
+  if (!clean) throw new Error(provider + ' returned an empty translation.');
+  const normalizeForComparison = (value) => String(value || '').normalize('NFKC').toLowerCase().replace(/[\p{P}\p{S}\s]+/gu, ' ').trim();
+  const sourceNormalized = normalizeForComparison(sourceText);
+  const targetNormalized = normalizeForComparison(clean);
+  // Exact source copies are not valid translations across different language
+  // codes. Keep a small allowance for single-word names/cognates, but reject
+  // unchanged phrases too; the previous long-text-only check let short English
+  // sentences be returned as successful English-to-Bemba translations.
+  const sourceWordCount = sourceNormalized ? sourceNormalized.split(/\\s+/u).length : 0;
+  if (sourceNormalized === targetNormalized &&
+      (sourceNormalized.length >= 12 || sourceWordCount >= 3)) {
+    console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; output identical to source');
+    throw new Error(provider + ' returned the source text without translating it.');
+  }
+  const tokenize = (value) => String(value || '').toLowerCase().normalize('NFKC').match(/[\p{L}\p{N}’'-]+/gu) || [];
+  const sourceTokens = tokenize(sourceText);
+  const targetSet = new Set(tokenize(clean));
+  if (sourceTokens.length >= 100) {
+    const meaningful = sourceTokens.filter((token) => token.length >= 4);
+    if (meaningful.length >= 60) {
+      const matched = meaningful.filter((token) => targetSet.has(token)).length;
+      if (matched / meaningful.length >= 0.88) {
+        console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; long output closely matches source');
+        throw new Error(provider + ' returned text that appears not to have been translated.');
+      }
+    }
+  }
   if (hasSevereRepetition(sourceText, clean)) {
-    console.warn(`[TRANSLATION_QUALITY_REJECTED] provider=${provider}; severe repeated-token output detected`);
-    throw new Error(`${provider} returned a suspiciously repetitive translation.`);
+    console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; severe repeated-token output detected');
+    throw new Error(provider + ' returned a suspiciously repetitive translation.');
   }
   return clean;
 }
-
 async function callGroqTranslation(text, sourceName, targetName, label) {
   if (!process.env.GROQ_API_KEY) throw new Error("Groq backup provider is not configured.");
 
@@ -662,16 +713,27 @@ async function translateLongText(text, sourceLang, targetLang) {
     const chunk = chunks[i];
     const memoryHit = await db.findTranslationMemory(chunk, sourceLang, targetLang);
     if (memoryHit?.translation) {
-      translated.push(memoryHit.translation);
-      console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
-      continue;
+      try {
+        requireUsableTranslation(chunk, memoryHit.translation, "cached long-page section");
+        translated.push(memoryHit.translation);
+        console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
+        continue;
+      } catch (qualityError) {
+        console.warn(`[LONG_TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
+        await db.deleteTranslationMemory(chunk, sourceLang, targetLang);
+      }
     }
 
     const chunkHit = await db.findWordMatch(chunk, sourceLang, targetLang);
     if (chunkHit?.translation) {
-      translated.push(chunkHit.translation);
-      console.log(`[LONG_TRANSLATION_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
-      continue;
+      try {
+        requireUsableTranslation(chunk, chunkHit.translation, "dictionary long-page section");
+        translated.push(chunkHit.translation);
+        console.log(`[LONG_TRANSLATION_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
+        continue;
+      } catch (qualityError) {
+        console.warn(`[LONG_TRANSLATION_DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
+      }
     }
 
     const result = await aiTranslate(chunk, sourceLang, targetLang);
@@ -711,12 +773,13 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   // stores complete sentences, paragraphs and page-sized translations.
   const memoryHit = await db.findTranslationMemory(text, sourceLang, targetLang);
   if (memoryHit) {
-    if (hasSevereRepetition(text, memoryHit.translation)) {
-      console.warn(`[TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; suspicious saved output ignored`);
-      await db.deleteTranslationMemory(text, sourceLang, targetLang);
-    } else {
+    try {
+      requireUsableTranslation(text, memoryHit.translation, "saved translation memory");
       console.log(`[TRANSLATION_MEMORY_HIT] ${sourceLang}->${targetLang}`);
       return res.json(memoryHit);
+    } catch (qualityError) {
+      console.warn(`[TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; suspicious saved output ignored`);
+      await db.deleteTranslationMemory(text, sourceLang, targetLang);
     }
   }
 
@@ -724,6 +787,10 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
     try {
       const pageTranslation = await translateLongText(text, sourceLang, targetLang);
       if (pageTranslation) {
+        // Validate the complete assembled page as a final safety net. If any
+        // cache/provider chunk slipped through, return a clean error instead
+        // of presenting clearly corrupted text as a successful translation.
+        requireUsableTranslation(text, pageTranslation, "assembled long-page translation");
         db.recordTranslationUsage({
           en: text.trim(), bm: pageTranslation, sourceLang, targetLang,
           source: "ai_long_page", userId: req.user ? req.user.id : null
@@ -751,6 +818,15 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   // Gemini to begin with.
   const hit = await db.findWordMatch(text, sourceLang, targetLang);
   if (hit) {
+    try {
+      requireUsableTranslation(text, hit.translation, "saved dictionary result");
+    } catch (qualityError) {
+      console.warn(`[DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; saved result ignored`);
+      // Do not return or cache a suspicious dictionary value; continue to AI.
+      hit.translation = null;
+    }
+  }
+  if (hit?.translation) {
     console.log(`[DICTIONARY_HIT] ${sourceLang}->${targetLang} direct`);
     db.recordTranslationUsage({ en: text.trim(), bm: hit.translation.trim(), sourceLang, targetLang, source: hit.source, userId: req.user ? req.user.id : null })
       .catch((e) => console.error("[dictionary-save]", e));
@@ -789,6 +865,9 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
       }
     }
     if (!translation) return res.status(404).json({ error: "Word not found." });
+    // Validate the final result against the original input as well as each AI
+    // hop. This catches cross-language bridge results that are unchanged.
+    translation = requireUsableTranslation(text, translation, "final translation");
     db.recordTranslationUsage({ en: text.trim(), bm: translation, sourceLang, targetLang, source: "ai", userId: req.user ? req.user.id : null })
       .catch((e) => console.error("[dictionary-save]", e));
     db.recordTranslationMemory({
