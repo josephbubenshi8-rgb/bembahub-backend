@@ -385,15 +385,34 @@ function hasSevereRepetition(sourceText, translatedText) {
 }
 
 function requireUsableTranslation(sourceText, translatedText, provider) {
-  const clean = String(translatedText || "").trim();
-  if (!clean) throw new Error(`${provider} returned an empty translation.`);
+  const clean = String(translatedText || '').trim();
+  if (!clean) throw new Error(provider + ' returned an empty translation.');
+  const normalizeForComparison = (value) => String(value || '').normalize('NFKC').toLowerCase().replace(/[\p{P}\p{S}\s]+/gu, ' ').trim();
+  const sourceNormalized = normalizeForComparison(sourceText);
+  const targetNormalized = normalizeForComparison(clean);
+  if (sourceNormalized.length >= 160 && sourceNormalized === targetNormalized) {
+    console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; output identical to source');
+    throw new Error(provider + ' returned the source text without translating it.');
+  }
+  const tokenize = (value) => String(value || '').toLowerCase().normalize('NFKC').match(/[\p{L}\p{N}’'-]+/gu) || [];
+  const sourceTokens = tokenize(sourceText);
+  const targetSet = new Set(tokenize(clean));
+  if (sourceTokens.length >= 100) {
+    const meaningful = sourceTokens.filter((token) => token.length >= 4);
+    if (meaningful.length >= 60) {
+      const matched = meaningful.filter((token) => targetSet.has(token)).length;
+      if (matched / meaningful.length >= 0.88) {
+        console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; long output closely matches source');
+        throw new Error(provider + ' returned text that appears not to have been translated.');
+      }
+    }
+  }
   if (hasSevereRepetition(sourceText, clean)) {
-    console.warn(`[TRANSLATION_QUALITY_REJECTED] provider=${provider}; severe repeated-token output detected`);
-    throw new Error(`${provider} returned a suspiciously repetitive translation.`);
+    console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; severe repeated-token output detected');
+    throw new Error(provider + ' returned a suspiciously repetitive translation.');
   }
   return clean;
 }
-
 async function callGroqTranslation(text, sourceName, targetName, label) {
   if (!process.env.GROQ_API_KEY) throw new Error("Groq backup provider is not configured.");
 
