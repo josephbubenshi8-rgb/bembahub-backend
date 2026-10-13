@@ -707,24 +707,26 @@ async function translateLongText(text, sourceLang, targetLang) {
     const chunk = chunks[i];
     const memoryHit = await db.findTranslationMemory(chunk, sourceLang, targetLang);
     if (memoryHit?.translation) {
-      if (hasSevereRepetition(chunk, memoryHit.translation)) {
-        console.warn(`[LONG_TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
-        await db.deleteTranslationMemory(chunk, sourceLang, targetLang);
-      } else {
+      try {
+        requireUsableTranslation(chunk, memoryHit.translation, "cached long-page section");
         translated.push(memoryHit.translation);
         console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
         continue;
+      } catch (qualityError) {
+        console.warn(`[LONG_TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
+        await db.deleteTranslationMemory(chunk, sourceLang, targetLang);
       }
     }
 
     const chunkHit = await db.findWordMatch(chunk, sourceLang, targetLang);
     if (chunkHit?.translation) {
-      if (hasSevereRepetition(chunk, chunkHit.translation)) {
-        console.warn(`[LONG_TRANSLATION_DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
-      } else {
+      try {
+        requireUsableTranslation(chunk, chunkHit.translation, "dictionary long-page section");
         translated.push(chunkHit.translation);
         console.log(`[LONG_TRANSLATION_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
         continue;
+      } catch (qualityError) {
+        console.warn(`[LONG_TRANSLATION_DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
       }
     }
 
@@ -765,12 +767,13 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   // stores complete sentences, paragraphs and page-sized translations.
   const memoryHit = await db.findTranslationMemory(text, sourceLang, targetLang);
   if (memoryHit) {
-    if (hasSevereRepetition(text, memoryHit.translation)) {
-      console.warn(`[TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; suspicious saved output ignored`);
-      await db.deleteTranslationMemory(text, sourceLang, targetLang);
-    } else {
+    try {
+      requireUsableTranslation(text, memoryHit.translation, "saved translation memory");
       console.log(`[TRANSLATION_MEMORY_HIT] ${sourceLang}->${targetLang}`);
       return res.json(memoryHit);
+    } catch (qualityError) {
+      console.warn(`[TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; suspicious saved output ignored`);
+      await db.deleteTranslationMemory(text, sourceLang, targetLang);
     }
   }
 
@@ -809,6 +812,15 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   // Gemini to begin with.
   const hit = await db.findWordMatch(text, sourceLang, targetLang);
   if (hit) {
+    try {
+      requireUsableTranslation(text, hit.translation, "saved dictionary result");
+    } catch (qualityError) {
+      console.warn(`[DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; saved result ignored`);
+      // Do not return or cache a suspicious dictionary value; continue to AI.
+      hit.translation = null;
+    }
+  }
+  if (hit?.translation) {
     console.log(`[DICTIONARY_HIT] ${sourceLang}->${targetLang} direct`);
     db.recordTranslationUsage({ en: text.trim(), bm: hit.translation.trim(), sourceLang, targetLang, source: hit.source, userId: req.user ? req.user.id : null })
       .catch((e) => console.error("[dictionary-save]", e));
