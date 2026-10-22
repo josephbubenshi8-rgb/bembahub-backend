@@ -31,6 +31,7 @@ async function main() {
   // implementation. These rows are deliberately unique to this test.
   const hintRows = [
     ["drinking water", "amenshi yakumwa"],
+    ["water", "amenshi"],
     ["purple cat", "kase ya purupulu"],
   ];
   for (const [en, bm] of hintRows) {
