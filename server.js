@@ -398,7 +398,7 @@ function requireUsableTranslation(sourceText, translatedText, provider) {
   // codes. Keep a small allowance for single-word names/cognates, but reject
   // unchanged phrases too; the previous long-text-only check let short English
   // sentences be returned as successful English-to-Bemba translations.
-  const sourceWordCount = sourceNormalized ? sourceNormalized.split(/\\s+/u).length : 0;
+  const sourceWordCount = sourceNormalized ? sourceNormalized.split(/\s+/u).length : 0;
   if (sourceNormalized === targetNormalized &&
       (sourceNormalized.length >= 12 || sourceWordCount >= 3)) {
     console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; output identical to source');
