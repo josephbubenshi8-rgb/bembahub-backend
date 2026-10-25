@@ -256,20 +256,38 @@ export async function getWordById(id) {
   return rows[0] || null;
 }
 
-// Looks up an existing translation for a specific language pair. Checks
-// verified first, then unverified (reusing an AI result already generated
-// for this exact phrase saves an API call and is how usage_count climbs),
-// then a partial/fuzzy verified match. Never matches a 'rejected' entry.
-export async function findWordMatch(text, sourceLang, targetLang) {
+// Exact verified dictionary matches must be available separately from cached AI
+// entries so the translation route can prefer trusted vocabulary over memory.
+export async function findVerifiedWordMatch(text, sourceLang, targetLang) {
   const q = (text || "").trim().toLowerCase();
   if (!q || !isValidLang(sourceLang) || !isValidLang(targetLang)) return null;
 
-  const { rows: verified } = await pool.query(
+  const { rows } = await pool.query(
     `SELECT * FROM words WHERE status='verified' AND source_lang=$1 AND target_lang=$2 AND LOWER(TRIM(en)) = $3 LIMIT 1`,
     [sourceLang, targetLang, q]
   );
-  if (verified[0]) {
-    return { translation: verified[0].bm, source: "dictionary", confidence: verified[0].confidence_score, wordId: verified[0].id, pron: verified[0].pron || undefined, label: `Verified — BembaHub dictionary${verified[0].contrib ? " · " + verified[0].contrib : ""}` };
+  const word = rows[0];
+  if (!word) return null;
+  return {
+    translation: word.bm,
+    source: "dictionary",
+    confidence: word.confidence_score,
+    wordId: word.id,
+    pron: word.pron || undefined,
+    label: `Verified — BembaHub dictionary${word.contrib ? " · " + word.contrib : ""}`,
+  };
+}
+
+// Looks up an existing exact translation. Verified entries are returned first,
+// followed by unverified cached entries; rejected entries are never returned.
+// Pass { skipVerified: true } only after findVerifiedWordMatch has already run.
+export async function findWordMatch(text, sourceLang, targetLang, options = {}) {
+  const q = (text || "").trim().toLowerCase();
+  if (!q || !isValidLang(sourceLang) || !isValidLang(targetLang)) return null;
+
+  if (!options.skipVerified) {
+    const verified = await findVerifiedWordMatch(text, sourceLang, targetLang);
+    if (verified) return verified;
   }
 
   const { rows: cached } = await pool.query(
@@ -277,12 +295,18 @@ export async function findWordMatch(text, sourceLang, targetLang) {
     [sourceLang, targetLang, q]
   );
   if (cached[0]) {
-    return { translation: cached[0].bm, source: "ai", confidence: cached[0].confidence_score, wordId: cached[0].id, pron: cached[0].pron || undefined, label: cached[0].high_confidence ? "AI Translation (high-confidence, awaiting admin verification)" : "AI Translation (previously generated, awaiting verification)" };
+    return {
+      translation: cached[0].bm,
+      source: "ai",
+      confidence: cached[0].confidence_score,
+      wordId: cached[0].id,
+      pron: cached[0].pron || undefined,
+      label: cached[0].high_confidence ? "AI Translation (high-confidence, awaiting admin verification)" : "AI Translation (previously generated, awaiting verification)",
+    };
   }
 
-  // Deliberately no fuzzy/partial match here. Translation must never turn a
-  // similar-looking dictionary entry into a false exact translation. Fuzzy
-  // matching remains available through /dictionary for human discovery.
+  // Deliberately no fuzzy/partial match here. Similar-looking entries remain
+  // available through /dictionary for human discovery, not exact translation.
   return null;
 }
 
@@ -353,6 +377,8 @@ export async function recordTranslationMemory({
      VALUES ($1,$2,$3,$4,$5,$6,1,$7,now(),now(),now())
      ON CONFLICT (source_lang,target_lang,source_text_key)
      DO UPDATE SET
+       target_text=CASE WHEN EXCLUDED.source='dictionary' THEN EXCLUDED.target_text ELSE translation_memory.target_text END,
+       source=CASE WHEN EXCLUDED.source='dictionary' THEN EXCLUDED.source ELSE translation_memory.source END,
        usage_count=translation_memory.usage_count+1,
        last_used_at=now(),
        updated_at=now()

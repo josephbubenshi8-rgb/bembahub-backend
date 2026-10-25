@@ -715,6 +715,28 @@ async function translateLongText(text, sourceLang, targetLang) {
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
+
+    // Trusted exact dictionary entries outrank any older AI-generated cache.
+    const verifiedChunkHit = await db.findVerifiedWordMatch(chunk, sourceLang, targetLang);
+    if (verifiedChunkHit?.translation) {
+      try {
+        requireUsableTranslation(chunk, verifiedChunkHit.translation, "verified dictionary long-page section");
+        translated.push(verifiedChunkHit.translation);
+        db.recordTranslationMemory({
+          sourceText: chunk,
+          targetText: verifiedChunkHit.translation,
+          sourceLang,
+          targetLang,
+          source: "dictionary",
+          userId: null,
+        }).catch((e) => console.error("[long-translation-dictionary-memory-save]", e));
+        console.log(`[LONG_TRANSLATION_VERIFIED_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
+        continue;
+      } catch (qualityError) {
+        console.warn(`[LONG_TRANSLATION_DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
+      }
+    }
+
     const memoryHit = await db.findTranslationMemory(chunk, sourceLang, targetLang);
     if (memoryHit?.translation) {
       try {
@@ -728,7 +750,7 @@ async function translateLongText(text, sourceLang, targetLang) {
       }
     }
 
-    const chunkHit = await db.findWordMatch(chunk, sourceLang, targetLang);
+    const chunkHit = await db.findWordMatch(chunk, sourceLang, targetLang, { skipVerified: true });
     if (chunkHit?.translation) {
       try {
         requireUsableTranslation(chunk, chunkHit.translation, "dictionary long-page section");
@@ -773,8 +795,31 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   }
   if (sourceLang === targetLang) return res.status(400).json({ error: "Source and target language must be different." });
 
-  // Translation memory comes first. Unlike the word dictionary, this table
-  // stores complete sentences, paragraphs and page-sized translations.
+  // Exact verified dictionary entries always outrank cached AI output.
+  // If this result already has stale memory saved, the dictionary-sourced upsert
+  // below also replaces that cached target with the trusted verified value.
+  const verifiedHit = await db.findVerifiedWordMatch(text, sourceLang, targetLang);
+  if (verifiedHit?.translation) {
+    try {
+      requireUsableTranslation(text, verifiedHit.translation, "verified dictionary result");
+      console.log(`[VERIFIED_DICTIONARY_HIT] ${sourceLang}->${targetLang} direct`);
+      db.recordTranslationUsage({
+        en: text.trim(), bm: verifiedHit.translation.trim(), sourceLang, targetLang,
+        source: "dictionary", userId: req.user ? req.user.id : null,
+      }).catch((e) => console.error("[dictionary-save]", e));
+      db.recordTranslationMemory({
+        sourceText: text.trim(), targetText: verifiedHit.translation.trim(),
+        sourceLang, targetLang, source: "dictionary",
+        userId: req.user ? req.user.id : null,
+      }).catch((e) => console.error("[translation-memory-save]", e));
+      return res.json(verifiedHit);
+    } catch (qualityError) {
+      console.warn(`[VERIFIED_DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; continuing with validated cache/AI`);
+    }
+  }
+
+  // Translation memory stores complete sentences, paragraphs and page-sized translations.
+  // It is checked only after an exact verified dictionary match.
   const memoryHit = await db.findTranslationMemory(text, sourceLang, targetLang);
   if (memoryHit) {
     try {
@@ -820,7 +865,7 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
   // Dictionary-first, always — this is what keeps BembaHub working at all
   // once Gemini's quota is exhausted, and it's why most requests never touch
   // Gemini to begin with.
-  const hit = await db.findWordMatch(text, sourceLang, targetLang);
+  const hit = await db.findWordMatch(text, sourceLang, targetLang, { skipVerified: true });
   if (hit) {
     try {
       requireUsableTranslation(text, hit.translation, "saved dictionary result");
