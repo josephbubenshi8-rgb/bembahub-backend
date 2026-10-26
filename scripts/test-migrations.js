@@ -30,9 +30,9 @@ async function main() {
   // Exercise the real database-backed dictionary-hint function, not a copied
   // implementation. These rows are deliberately unique to this test.
   const hintRows = [
-    ["drinking water", "amenshi yakumwa"],
-    ["water", "amenshi"],
-    ["purple cat", "kase ya purupulu"],
+    ["zzyzx bembahub phrase 2026", "test target phrase"],
+    ["zzyzx", "test target"],
+    ["qwertybembahub unrelated term", "unrelated target"],
   ];
   for (const [en, bm] of hintRows) {
     await pool.query(
@@ -42,25 +42,25 @@ async function main() {
   }
 
   const phraseHints = await findDictionaryHints(
-    "Please bring drinking water, because the water is clean.",
+    "Please bring zzyzx bembahub phrase 2026, because zzyzx is ready.",
     "eng",
     "bem"
   );
-  assert(phraseHints.some((hint) => hint.source.toLowerCase() === "drinking water"),
+  assert(phraseHints.some((hint) => hint.source.toLowerCase() === "zzyzx bembahub phrase 2026"),
     "a complete multiword phrase should be found");
-  assert(phraseHints.some((hint) => hint.source.toLowerCase() === "water"),
-    "the individual word should also be found when present as a separate word");
+  assert(phraseHints.some((hint) => hint.source.toLowerCase() === "zzyzx"),
+    "the shorter term should also be found when present as a separate word");
   assert(
     phraseHints.findIndex((hint) => hint.source.toLowerCase() === "drinking water") <
       phraseHints.findIndex((hint) => hint.source.toLowerCase() === "water"),
     "longer phrases should be returned before their shorter contained terms"
   );
-  assert(!phraseHints.some((hint) => hint.source.toLowerCase() === "purple cat"),
+  assert(!phraseHints.some((hint) => hint.source.toLowerCase() === "qwertybembahub unrelated term"),
     "unrelated dictionary terms must not be included");
 
-  const boundaryHints = await findDictionaryHints("The watermelon is ripe.", "eng", "bem");
+  const boundaryHints = await findDictionaryHints("The zzyzxmelon is ripe.", "eng", "bem");
   assert(!boundaryHints.some((hint) => hint.source.toLowerCase() === "water"),
-    "water must not match inside the unrelated word watermelon");
+    "zzyzx must not match inside the unrelated word zzyzxmelon");
 
   const unsupportedPairHints = await findDictionaryHints("water", "eng", "nya");
   assert.deepEqual(unsupportedPairHints, [],
