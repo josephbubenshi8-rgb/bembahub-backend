@@ -51,15 +51,15 @@ async function main() {
   assert(phraseHints.some((hint) => hint.source.toLowerCase() === "zzyzx"),
     "the shorter term should also be found when present as a separate word");
   assert(
-    phraseHints.findIndex((hint) => hint.source.toLowerCase() === "drinking water") <
-      phraseHints.findIndex((hint) => hint.source.toLowerCase() === "water"),
+    phraseHints.findIndex((hint) => hint.source.toLowerCase() === "zzyzx bembahub phrase 2026") <
+      phraseHints.findIndex((hint) => hint.source.toLowerCase() === "zzyzx"),
     "longer phrases should be returned before their shorter contained terms"
   );
   assert(!phraseHints.some((hint) => hint.source.toLowerCase() === "qwertybembahub unrelated term"),
     "unrelated dictionary terms must not be included");
 
   const boundaryHints = await findDictionaryHints("The zzyzxmelon is ripe.", "eng", "bem");
-  assert(!boundaryHints.some((hint) => hint.source.toLowerCase() === "water"),
+  assert(!boundaryHints.some((hint) => hint.source.toLowerCase() === "zzyzx"),
     "zzyzx must not match inside the unrelated word zzyzxmelon");
 
   const unsupportedPairHints = await findDictionaryHints("water", "eng", "nya");
