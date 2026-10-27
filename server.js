@@ -1153,6 +1153,48 @@ app.put("/admin/ai-provider", requireAuth, requireRole("admin"), asyncRoute(asyn
   res.json({ success: true, provider });
 }));
 
+app.post("/admin/ai-provider/test", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const provider = typeof req.body?.provider === "string" ? req.body.provider : "";
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  const srcLang = typeof req.body?.srcLang === "string" ? req.body.srcLang : "";
+  const tgtLang = typeof req.body?.tgtLang === "string" ? req.body.tgtLang : "";
+
+  if (!AI_PROVIDER_ORDER.includes(provider)) {
+    return res.status(400).json({ error: "Choose one specific AI provider to test. Automatic failover cannot be tested as a single provider." });
+  }
+  if (!isAIProviderConfigured(provider)) {
+    return res.status(400).json({ error: "This provider is not configured. Add its API key in Render environment settings first." });
+  }
+  if (!text || text.length > 3000) {
+    return res.status(400).json({ error: "Enter test text between 1 and 3000 characters." });
+  }
+  if (!isValidLang(srcLang) || !isValidLang(tgtLang) || srcLang === tgtLang) {
+    return res.status(400).json({ error: "Choose two different supported languages." });
+  }
+
+  const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
+  const dialectInstruction = tgtLang === "bem"
+    ? " Translate into natural, standard written Northern Province Icibemba, especially usage associated with Kasama and Mungwi. Preserve every meaning unit, tense, time, destination, reason, need, and purpose. Use established Icibemba grammar and vocabulary, not word-for-word English structure. Never substitute Nyanja or mix languages. Do not invent words, add details, omit meaning, repeat phrases, or produce circular/meaningless wording. Silently check for completeness, natural phrasing, repetition, and faithfulness."
+    : "";
+  const prompt = `Translate the complete input from ${srcName} into natural ${tgtName}.${dialectInstruction} Preserve paragraph breaks. Return only the translation, nothing else. Do not include explanations, labels, confidence claims, or source text unless explicitly requested.`;
+  const label = `ADMIN_PROVIDER_TEST ${provider} ${srcLang}->${tgtLang} (${text.length} chars)`;
+  const startedAt = Date.now();
+
+  try {
+    const translation = await callSelectedAIProvider(provider, text, srcLang, tgtLang, label, prompt);
+    console.log(`[AI_PROVIDER_TEST_SUCCESS] provider=${provider} duration_ms=${Date.now() - startedAt} ${srcLang}->${tgtLang}`);
+    res.json({ success: true, provider, srcLang, tgtLang, translation, durationMs: Date.now() - startedAt });
+  } catch (err) {
+    console.warn(`[AI_PROVIDER_TEST_FAILED] provider=${provider} duration_ms=${Date.now() - startedAt}: ${err.message}`);
+    res.status(502).json({
+      success: false,
+      provider,
+      durationMs: Date.now() - startedAt,
+      error: err.message || "The selected provider failed. Check server logs for details."
+    });
+  }
+}));
+
 app.post("/admin/dictionary/import", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const { entries, sourceName, sourceUrl, sourceLicense, defaultStatus } = req.body || {};
   if (!Array.isArray(entries) || !entries.length) return res.status(400).json({ error: "entries must be a non-empty array." });
