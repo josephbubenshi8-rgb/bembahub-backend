@@ -680,8 +680,8 @@ async function callSelectedAIProvider(provider, text, srcLang, tgtLang, label, p
 
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
-  const dialectInstruction = tgtLang === "bem" ? " Use standard written Northern Province Icibemba, especially the variety associated with Kasama and nearby Mungwi. Do not substitute Nyanja or mix languages. Prefer established, natural Bemba wording and preserve the source meaning." : "";
-  const prompt = `Translate the following ${srcName} text into natural ${tgtName}.${dialectInstruction} Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
+  const dialectInstruction = tgtLang === "bem" ? " Translate into natural, standard written Northern Province Icibemba, especially usage associated with Kasama and Mungwi. Preserve every meaning unit from the source, including who does what, tense, time, destination, reason, need, and purpose. Use established Icibemba grammar and vocabulary, not word-for-word English structure. Never substitute Nyanja or mix languages. Do not invent words, add details, omit meaning, repeat phrases, or produce circular/meaningless wording. Silently check the result for completeness, natural phrasing, repetition, and faithfulness before answering. If uncertain about a phrase, choose the clearest natural Icibemba wording rather than fabricating one." : "";
+  const prompt = `Translate the following ${srcName} text into natural ${tgtName}.${dialectInstruction} Preserve paragraph breaks. Return only the translation, nothing else. Do not include explanations, labels, confidence claims, or the source text unless explicitly requested.\n\n${text}`;
   const label = `${srcLang}->${tgtLang} (${text.length} chars)`;
   const selected = await readPreferredAIProvider();
   const order = selected === "auto"
