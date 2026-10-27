@@ -398,7 +398,7 @@ function requireUsableTranslation(sourceText, translatedText, provider) {
   // codes. Keep a small allowance for single-word names/cognates, but reject
   // unchanged phrases too; the previous long-text-only check let short English
   // sentences be returned as successful English-to-Bemba translations.
-  const sourceWordCount = sourceNormalized ? sourceNormalized.split(/\\s+/u).length : 0;
+  const sourceWordCount = sourceNormalized ? sourceNormalized.split(/\s+/u).length : 0;
   if (sourceNormalized === targetNormalized &&
       (sourceNormalized.length >= 12 || sourceWordCount >= 3)) {
     console.warn('[TRANSLATION_QUALITY_REJECTED] provider=' + provider + '; output identical to source');
@@ -625,85 +625,103 @@ async function callCloudflareWorkersAITranslation(text, sourceName, targetName, 
   }
 }
 
+const AI_PROVIDER_ORDER = ["gemini", "groq", "openrouter", "mistral", "huggingface", "cloudflare"];
+let preferredAIProvider = ["auto", ...AI_PROVIDER_ORDER].includes(process.env.AI_PRIMARY_PROVIDER)
+  ? (process.env.AI_PRIMARY_PROVIDER || "auto")
+  : "auto";
+
+function isAIProviderConfigured(provider) {
+  switch (provider) {
+    case "gemini": return Boolean(process.env.GEMINI_API_KEY);
+    case "groq": return Boolean(process.env.GROQ_API_KEY);
+    case "openrouter": return Boolean(process.env.OPENROUTER_API_KEY);
+    case "mistral": return Boolean(process.env.MISTRAL_API_KEY);
+    case "huggingface": return Boolean(process.env.HF_TOKEN);
+    case "cloudflare": return Boolean(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN);
+    default: return false;
+  }
+}
+
+async function readPreferredAIProvider() {
+  try {
+    const { rows } = await db.pool.query("SELECT value FROM app_settings WHERE key = $1", ["ai_primary_provider"]);
+    const value = rows[0]?.value;
+    if (["auto", ...AI_PROVIDER_ORDER].includes(value)) preferredAIProvider = value;
+  } catch (err) {
+    console.warn("[AI_PROVIDER_SETTING_READ_FAILED] Using current provider preference.");
+  }
+  return preferredAIProvider;
+}
+
+async function callSelectedAIProvider(provider, text, srcLang, tgtLang, label, prompt) {
+  const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
+  switch (provider) {
+    case "gemini": {
+      const response = await callGemini(
+        () => ai.models.generateContent({ model: "gemini-flash-latest", contents: prompt }),
+        label
+      );
+      return requireUsableTranslation(text, response.text, "Gemini");
+    }
+    case "groq":
+      return requireUsableTranslation(text, await callGroqTranslation(text, srcName, tgtName, label), "Groq");
+    case "openrouter":
+      return requireUsableTranslation(text, await callOpenRouterTranslation(text, srcName, tgtName, label), "OpenRouter");
+    case "mistral":
+      return requireUsableTranslation(text, await callMistralTranslation(text, srcName, tgtName, label), "Mistral");
+    case "huggingface":
+      return requireUsableTranslation(text, await callHuggingFaceTranslation(text, srcName, tgtName, label), "Hugging Face");
+    case "cloudflare":
+      return requireUsableTranslation(text, await callCloudflareWorkersAITranslation(text, srcName, tgtName, label), "Cloudflare Workers AI");
+    default:
+      throw new Error("Unknown AI translation provider.");
+  }
+}
+
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
   const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
+  const label = `${srcLang}->${tgtLang} (${text.length} chars)`;
+  const selected = await readPreferredAIProvider();
+  const order = selected === "auto"
+    ? AI_PROVIDER_ORDER
+    : [selected, ...AI_PROVIDER_ORDER.filter((provider) => provider !== selected)];
+  const configured = order.filter(isAIProviderConfigured);
+  if (!configured.length) throw new Error("No AI translation provider is configured. Add at least one provider API key in Render environment settings.");
 
-  for (let attempt = 0; ; attempt++) {
+  let lastError = null;
+  for (let index = 0; index < configured.length; index++) {
+    const provider = configured[index];
     try {
-      const response = await callGemini(
-        () => ai.models.generateContent({ model: "gemini-flash-latest", contents: prompt }),
-        `translate ${srcLang}->${tgtLang} (${text.length} chars)`
-      );
-      const translation = requireUsableTranslation(text, response.text, "Gemini");
+      const translation = await callSelectedAIProvider(provider, text, srcLang, tgtLang, label, prompt);
+      console.log(`[AI_PROVIDER_SUCCESS] provider=${provider} ${label}`);
       return translation;
     } catch (err) {
-      // Automatic translation failover: only activate Groq when its server-side
-      // key is configured. Do not wait through Gemini overload retries when a
-      // backup is available. Existing Gemini-only behavior remains unchanged
-      // for deployments without configured backup-provider keys.
-      const label = `${srcLang}->${tgtLang} (${text.length} chars)`;
-      if (process.env.GROQ_API_KEY) {
-        console.warn(`[AI_FAILOVER] Gemini unavailable for ${srcLang}->${tgtLang}; trying Groq.`);
-        try {
-          return requireUsableTranslation(text, await callGroqTranslation(text, srcName, tgtName, label), "Groq");
-        } catch (backupError) {
-          console.error(`[AI_FAILOVER_GROQ_FAILED] Groq unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
+      lastError = err;
+      console.warn(`[AI_PROVIDER_FAILED] provider=${provider} ${label}: ${err.message}`);
+      if (provider === "gemini" && configured.length === 1 &&
+          err instanceof QuotaExceededError && err.reason === "overload") {
+        for (let attempt = 0; attempt < GEMINI_RETRY_DELAYS_MS.length; attempt++) {
+          const delay = Math.max(
+            GEMINI_RETRY_DELAYS_MS[attempt],
+            (err.retryAfterSeconds || OVERLOAD_COOLDOWN_SECONDS) * 1000 + 250
+          );
+          console.log(`[GEMINI_RETRY] ${label} attempt ${attempt + 1} after ${delay}ms`);
+          await sleep(delay);
+          try {
+            const translation = await callSelectedAIProvider("gemini", text, srcLang, tgtLang, label, prompt);
+            console.log(`[AI_PROVIDER_SUCCESS] provider=gemini ${label}`);
+            return translation;
+          } catch (retryError) {
+            lastError = retryError;
+            if (!(retryError instanceof QuotaExceededError) || retryError.reason !== "overload") break;
+          }
         }
       }
-
-      if (process.env.OPENROUTER_API_KEY) {
-        console.warn(`[AI_FAILOVER] Previous provider unavailable for ${srcLang}->${tgtLang}; trying OpenRouter free-model router.`);
-        try {
-          return requireUsableTranslation(text, await callOpenRouterTranslation(text, srcName, tgtName, label), "OpenRouter");
-        } catch (backupError) {
-          console.error(`[AI_FAILOVER_OPENROUTER_FAILED] OpenRouter unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
-        }
-      }
-
-      if (process.env.MISTRAL_API_KEY) {
-        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Mistral.`);
-        try {
-          return requireUsableTranslation(text, await callMistralTranslation(text, srcName, tgtName, label), "Mistral");
-        } catch (backupError) {
-          console.error(`[AI_FAILOVER_MISTRAL_FAILED] Mistral unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
-        }
-      }
-
-      if (process.env.HF_TOKEN) {
-        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Hugging Face Inference Providers.`);
-        try {
-          return requireUsableTranslation(text, await callHuggingFaceTranslation(text, srcName, tgtName, label), "Hugging Face");
-        } catch (backupError) {
-          console.error(`[AI_FAILOVER_HUGGINGFACE_FAILED] Hugging Face Inference Providers unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
-        }
-      }
-
-      if (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN) {
-        console.warn(`[AI_FAILOVER] Previous providers unavailable for ${srcLang}->${tgtLang}; trying Cloudflare Workers AI.`);
-        try {
-          return requireUsableTranslation(text, await callCloudflareWorkersAITranslation(text, srcName, tgtName, label), "Cloudflare Workers AI");
-        } catch (backupError) {
-          console.error(`[AI_FAILOVER_CLOUDFLARE_AI_FAILED] Cloudflare Workers AI unavailable for ${srcLang}->${tgtLang}: ${backupError.message}`);
-        }
-      }
-
-      if (process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY || process.env.MISTRAL_API_KEY || process.env.HF_TOKEN || (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN)) {
-        console.error(`[AI_FAILOVER_FAILED] Gemini and configured backup providers unavailable for ${srcLang}->${tgtLang}`);
-        throw err;
-      }
-
-      if (!(err instanceof QuotaExceededError) || err.reason !== "overload" || attempt >= GEMINI_RETRY_DELAYS_MS.length) {
-        throw err;
-      }
-      const delay = Math.max(
-        GEMINI_RETRY_DELAYS_MS[attempt],
-        (err.retryAfterSeconds || OVERLOAD_COOLDOWN_SECONDS) * 1000 + 250
-      );
-      console.log(`[GEMINI_RETRY] ${srcLang}->${tgtLang} attempt ${attempt + 1} after ${delay}ms`);
-      await sleep(delay);
     }
   }
+  console.error(`[AI_FAILOVER_FAILED] configured providers exhausted for ${srcLang}->${tgtLang}`);
+  throw lastError || new Error("All configured AI providers failed.");
 }
 
 async function translateLongText(text, sourceLang, targetLang) {
@@ -1120,6 +1138,37 @@ app.delete("/dictionary/candidates/:id", requireAuth, requireRole("admin"), asyn
    ADMIN DICTIONARY NAMESPACE — the primary admin dictionary-management API.
    Same underlying logic as /dictionary/candidates above.
 ══════════════════════════════════════════ */
+app.get("/admin/ai-provider", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const selected = await readPreferredAIProvider();
+  res.json({
+    provider: selected,
+    providers: [
+      { id: "gemini", label: "Google Gemini", configured: isAIProviderConfigured("gemini") },
+      { id: "groq", label: "Groq", configured: isAIProviderConfigured("groq") },
+      { id: "openrouter", label: "OpenRouter", configured: isAIProviderConfigured("openrouter") },
+      { id: "mistral", label: "Mistral", configured: isAIProviderConfigured("mistral") },
+      { id: "huggingface", label: "Hugging Face", configured: isAIProviderConfigured("huggingface") },
+      { id: "cloudflare", label: "Cloudflare Workers AI", configured: isAIProviderConfigured("cloudflare") }
+    ]
+  });
+}));
+
+app.put("/admin/ai-provider", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const provider = typeof req.body?.provider === "string" ? req.body.provider : "";
+  if (!["auto", ...AI_PROVIDER_ORDER].includes(provider)) {
+    return res.status(400).json({ error: "Choose a supported AI provider." });
+  }
+  if (provider !== "auto" && !isAIProviderConfigured(provider)) {
+    return res.status(400).json({ error: "That provider is not configured. Add its API key in Render environment settings first." });
+  }
+  await db.pool.query(
+    "INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+    ["ai_primary_provider", provider]
+  );
+  preferredAIProvider = provider;
+  res.json({ success: true, provider });
+}));
+
 app.post("/admin/dictionary/import", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const { entries, sourceName, sourceUrl, sourceLicense, defaultStatus } = req.body || {};
   if (!Array.isArray(entries) || !entries.length) return res.status(400).json({ error: "entries must be a non-empty array." });
