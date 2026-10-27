@@ -1,0 +1,182 @@
+{
+  "title": "BembaHub Northern Province Icibemba QA Starter Pack",
+  "version": 1,
+  "purpose": "Manual QA fixture only. This file is not imported into production or the translation database.",
+  "target": {
+    "languageCode": "bem",
+    "label": "Standard written Icibemba (Northern Province)",
+    "regionalFocus": "Kasama and nearby Mungwi",
+    "note": "Candidate phrases are gathered from public learning resources, not certified as authoritative. A fluent Northern Province speaker must approve every expected translation before this pack is used as a gold-standard quality benchmark."
+  },
+  "cases": [
+    {
+      "id": "greet-001",
+      "category": "greetings",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "Good morning.",
+      "candidateReferenceTranslation": "Mwashibukeni.",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Public Bemba learning resources list Mwashibukeni as a morning greeting."
+    },
+    {
+      "id": "greet-002",
+      "category": "greetings",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "How are you?",
+      "candidateReferenceTranslation": "Muli shani?",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Common greeting; confirm preferred wording and register with a Northern Province speaker."
+    },
+    {
+      "id": "greet-003",
+      "category": "greetings",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "Welcome.",
+      "candidateReferenceTranslation": "Mwaiseni.",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Public Bemba learning resources list Mwaiseni as welcome."
+    },
+    {
+      "id": "greet-004",
+      "category": "greetings",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "Thank you very much.",
+      "candidateReferenceTranslation": "Natotela sana.",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Candidate wording; confirm naturalness and spelling with a Northern Province speaker."
+    },
+    {
+      "id": "greet-005",
+      "category": "greetings",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "I am fine. And you?",
+      "candidateReferenceTranslation": "Ndifye bwino. Ngaimwe muli shani?",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Candidate wording based on public Bemba lesson material; validate before scoring."
+    },
+    {
+      "id": "daily-001",
+      "category": "daily-conversation",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "Please help me.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference"
+    },
+    {
+      "id": "daily-002",
+      "category": "daily-conversation",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "I do not understand.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference"
+    },
+    {
+      "id": "daily-003",
+      "category": "daily-conversation",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "Where is the market?",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference"
+    },
+    {
+      "id": "health-001",
+      "category": "health",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "I need to see a nurse.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference",
+      "safetyNote": "Health-related wording must be checked carefully by a fluent speaker before use."
+    },
+    {
+      "id": "health-002",
+      "category": "health",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "I have had a headache since yesterday.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference",
+      "safetyNote": "Health-related wording must be checked carefully by a fluent speaker before use."
+    },
+    {
+      "id": "church-001",
+      "category": "church",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "May God give you peace.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference",
+      "safetyNote": "Faith-related phrasing may vary; validate with a fluent speaker familiar with church language."
+    },
+    {
+      "id": "church-002",
+      "category": "church",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "Let us pray together.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference",
+      "safetyNote": "Faith-related phrasing may vary; validate with a fluent speaker familiar with church language."
+    },
+    {
+      "id": "long-001",
+      "category": "long-text",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "Good morning. I am going to the market today because we need food for the family. Please tell my brother that I will return before sunset.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference",
+      "testNotes": "Check complete meaning, sentence order, paragraph preservation, and no untranslated English sentences."
+    },
+    {
+      "id": "long-002",
+      "category": "long-text",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "Our community is meeting on Saturday to discuss clean water, school attendance, and care for elderly people. Everyone is welcome to share ideas respectfully. We will write down the decisions and agree on the next steps together.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference",
+      "testNotes": "Check completeness, consistency, and paragraph structure. Use for latency testing before quality scoring."
+    },
+    {
+      "id": "quality-001",
+      "category": "anti-copy",
+      "sourceLang": "eng",
+      "targetLang": "bem",
+      "sourceText": "The children are reading a new book at school.",
+      "candidateReferenceTranslation": null,
+      "expectedTranslation": null,
+      "referenceStatus": "needs-native-reference",
+      "testNotes": "Translation must not simply return the English source unchanged."
+    }
+  ],
+  "runInstructions": [
+    "Run each case through the deployed BembaHub interface after confirming the backend deployment is Live.",
+    "Record total response time, whether the request succeeded, selected provider if available, and the returned text.",
+    "Do not paste API keys, access tokens, passwords, or private client text into this fixture.",
+    "Do not write candidate answers into production translation memory until a fluent Northern Province speaker has reviewed and approved them.",
+    "Measure short text and long text separately. Repeat after the service is warm and after a period of inactivity to identify cold-start effects."
+  ]
+}
