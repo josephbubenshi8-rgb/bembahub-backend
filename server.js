@@ -442,7 +442,7 @@ async function callGroqTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
+            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. When translating into Bemba, use standard written Northern Province Icibemba, especially the variety associated with Kasama and nearby Mungwi. Do not substitute Nyanja or mix languages; prefer established natural Bemba wording. For other target languages, use their standard written form. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -484,7 +484,7 @@ async function callOpenRouterTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
+            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. When translating into Bemba, use standard written Northern Province Icibemba, especially the variety associated with Kasama and nearby Mungwi. Do not substitute Nyanja or mix languages; prefer established natural Bemba wording. For other target languages, use their standard written form. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -524,7 +524,7 @@ async function callMistralTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
+            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. When translating into Bemba, use standard written Northern Province Icibemba, especially the variety associated with Kasama and nearby Mungwi. Do not substitute Nyanja or mix languages; prefer established natural Bemba wording. For other target languages, use their standard written form. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -565,7 +565,7 @@ async function callHuggingFaceTranslation(text, sourceName, targetName, label) {
         messages: [
           {
             role: "system",
-            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. Use standard written Bemba where possible. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
+            content: `You are a careful translator for BembaHub. Translate the complete input from ${sourceName} into fluent, natural ${targetName} as used in Zambia. This is translation, not summarization or commentary. Preserve every idea and sentence in the original order; do not omit, invent, repeat, or pad content. Keep names, dates, numbers, Bible book names, chapter-and-verse references, quotations, headings, lists, and paragraph breaks faithful to the source. Translate ordinary prose rather than leaving English sentences unchanged. Keep proper names and references intact when appropriate. When translating into Bemba, use standard written Northern Province Icibemba, especially the variety associated with Kasama and nearby Mungwi. Do not substitute Nyanja or mix languages; prefer established natural Bemba wording. For other target languages, use their standard written form. If a phrase is genuinely ambiguous, choose the most contextually faithful wording rather than fabricating details. Return only the translated text, with no preface, labels, notes, or explanation.`,
           },
           { role: "user", content: text },
         ],
@@ -680,7 +680,8 @@ async function callSelectedAIProvider(provider, text, srcLang, tgtLang, label, p
 
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
-  const prompt = `Translate the following ${srcName} text into natural ${tgtName}. Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
+  const dialectInstruction = tgtLang === "bem" ? " Use standard written Northern Province Icibemba, especially the variety associated with Kasama and nearby Mungwi. Do not substitute Nyanja or mix languages. Prefer established, natural Bemba wording and preserve the source meaning." : "";
+  const prompt = `Translate the following ${srcName} text into natural ${tgtName}.${dialectInstruction} Preserve paragraph breaks and meaning. Return only the translation, nothing else:\n\n${text}`;
   const label = `${srcLang}->${tgtLang} (${text.length} chars)`;
   const selected = await readPreferredAIProvider();
   const order = selected === "auto"
@@ -692,32 +693,15 @@ async function aiTranslate(text, srcLang, tgtLang) {
   let lastError = null;
   for (let index = 0; index < configured.length; index++) {
     const provider = configured[index];
+    const providerStartedAt = Date.now();
     try {
       const translation = await callSelectedAIProvider(provider, text, srcLang, tgtLang, label, prompt);
-      console.log(`[AI_PROVIDER_SUCCESS] provider=${provider} ${label}`);
+      console.log(`[AI_PROVIDER_SUCCESS] provider=${provider} duration_ms=${Date.now() - providerStartedAt} ${label}`);
       return translation;
     } catch (err) {
       lastError = err;
-      console.warn(`[AI_PROVIDER_FAILED] provider=${provider} ${label}: ${err.message}`);
-      if (provider === "gemini" && configured.length === 1 &&
-          err instanceof QuotaExceededError && err.reason === "overload") {
-        for (let attempt = 0; attempt < GEMINI_RETRY_DELAYS_MS.length; attempt++) {
-          const delay = Math.max(
-            GEMINI_RETRY_DELAYS_MS[attempt],
-            (err.retryAfterSeconds || OVERLOAD_COOLDOWN_SECONDS) * 1000 + 250
-          );
-          console.log(`[GEMINI_RETRY] ${label} attempt ${attempt + 1} after ${delay}ms`);
-          await sleep(delay);
-          try {
-            const translation = await callSelectedAIProvider("gemini", text, srcLang, tgtLang, label, prompt);
-            console.log(`[AI_PROVIDER_SUCCESS] provider=gemini ${label}`);
-            return translation;
-          } catch (retryError) {
-            lastError = retryError;
-            if (!(retryError instanceof QuotaExceededError) || retryError.reason !== "overload") break;
-          }
-        }
-      }
+      console.warn(`[AI_PROVIDER_FAILED] provider=${provider} duration_ms=${Date.now() - providerStartedAt} ${label}: ${err.message}`);
+
     }
   }
   console.error(`[AI_FAILOVER_FAILED] configured providers exhausted for ${srcLang}->${tgtLang}`);
