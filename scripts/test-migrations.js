@@ -1,6 +1,13 @@
 import fs from "node:fs";
 import assert from "node:assert/strict";
-import { pool, initSchema } from "../db.js";
+import {
+  pool,
+  initSchema,
+  findVerifiedWordMatch,
+  findWordMatch,
+  findTranslationMemory,
+  recordTranslationMemory,
+} from "../db.js";
 
 async function main() {
   await initSchema();
@@ -27,6 +34,76 @@ async function main() {
   assert.deepEqual(retained.map((row) => row.target_lang), ["bem", "nya"],
     "migration 004 must retain identical text pairs from different language pairs");
 
+  // Regression test: exact verified dictionary entries must outrank stale AI
+  // translation memory, and a later AI save must not overwrite that trusted value.
+  const priorityPhrase = "BembaHub verified priority regression sample";
+  const priorityKey = priorityPhrase.toLowerCase();
+  try {
+    await pool.query(
+      "INSERT INTO words (en,bm,source_lang,target_lang,status,contrib) " +
+      "VALUES ($1,'Verified translation','eng','bem','verified','translation-priority-test'), " +
+      "($1,'Old unverified translation','eng','bem','unverified','translation-priority-test')",
+      [priorityPhrase]
+    );
+
+    const verified = await findVerifiedWordMatch(priorityPhrase, "eng", "bem");
+    assert.equal(verified?.translation, "Verified translation",
+      "the exact verified dictionary entry should be found separately");
+
+    const preferred = await findWordMatch(priorityPhrase, "eng", "bem");
+    assert.equal(preferred?.translation, "Verified translation",
+      "normal dictionary lookup should prefer the verified entry");
+
+    const cachedOnly = await findWordMatch(priorityPhrase, "eng", "bem", { skipVerified: true });
+    assert.equal(cachedOnly?.translation, "Old unverified translation",
+      "skipVerified should expose only the unverified cached candidate");
+
+    await recordTranslationMemory({
+      sourceText: priorityPhrase,
+      targetText: "Stale AI translation",
+      sourceLang: "eng",
+      targetLang: "bem",
+      source: "ai",
+      userId: null,
+    });
+    await recordTranslationMemory({
+      sourceText: priorityPhrase,
+      targetText: "Verified translation",
+      sourceLang: "eng",
+      targetLang: "bem",
+      source: "dictionary",
+      userId: null,
+    });
+    await recordTranslationMemory({
+      sourceText: priorityPhrase,
+      targetText: "Later AI translation",
+      sourceLang: "eng",
+      targetLang: "bem",
+      source: "ai",
+      userId: null,
+    });
+
+    const memory = await findTranslationMemory(priorityPhrase, "eng", "bem");
+    assert.equal(memory?.translation, "Verified translation",
+      "verified dictionary output should replace stale memory and resist later AI overwrites");
+
+    const { rows: storedMemory } = await pool.query(
+      "SELECT target_text, source FROM translation_memory WHERE source_lang='eng' AND target_lang='bem' AND source_text_key=$1",
+      [priorityKey]
+    );
+    assert.equal(storedMemory[0]?.target_text, "Verified translation");
+    assert.equal(storedMemory[0]?.source, "dictionary");
+  } finally {
+    await pool.query(
+      "DELETE FROM translation_memory WHERE source_lang='eng' AND target_lang='bem' AND source_text_key=$1",
+      [priorityKey]
+    );
+    await pool.query(
+      "DELETE FROM words WHERE en=$1 AND contrib='translation-priority-test'",
+      [priorityPhrase]
+    );
+  }
+
   await initSchema();
   const { rows: appliedAfter } = await pool.query("SELECT COUNT(*)::int AS n FROM schema_migrations");
   assert.equal(appliedAfter[0].n, migrationFiles.length, "a second startup must not re-run or duplicate migration records");
@@ -38,7 +115,7 @@ async function main() {
   assert.deepEqual(retainedAfterRestart.map((row) => row.target_lang), ["bem", "nya"],
     "multilingual rows must remain after a second startup");
 
-  console.log("Migration tests passed: first boot, multilingual deduplication safety, and repeat startup.");
+  console.log("Database tests passed: first boot, multilingual deduplication safety, verified-dictionary priority, translation-memory protection, and repeat startup.");
 }
 
 main()
