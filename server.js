@@ -680,7 +680,11 @@ async function callSelectedAIProvider(provider, text, srcLang, tgtLang, label, p
 
 async function aiTranslate(text, srcLang, tgtLang) {
   const srcName = LANGUAGES[srcLang], tgtName = LANGUAGES[tgtLang];
-  const dialectInstruction = tgtLang === "bem" ? " Translate into natural, standard written Northern Province Icibemba, especially usage associated with Kasama and Mungwi. Preserve every meaning unit from the source, including who does what, tense, time, destination, reason, need, and purpose. Use established Icibemba grammar and vocabulary, not word-for-word English structure. Never substitute Nyanja or mix languages. Do not invent words, add details, omit meaning, repeat phrases, or produce circular/meaningless wording. Silently check the result for completeness, natural phrasing, repetition, and faithfulness before answering. If uncertain about a phrase, choose the clearest natural Icibemba wording rather than fabricating one." : "";
+  const dialectInstruction = tgtLang === "bem"
+    ? " The target language must be standard written Northern Province Icibemba (Bemba), especially the Kasama and Mungwi variety. Produce idiomatic, grammatical Icibemba, not word-for-word English, Nyanja, or a mixture. Use established Bemba vocabulary and natural sentence order. Preserve every meaning unit: people, actions, tense, time, place, reason, need, and purpose. Do not invent words or details, omit content, repeat phrases, or produce nonsensical text. Before responding, silently check that the whole result reads as genuine Icibemba and faithfully expresses the source."
+    : srcLang === "bem"
+      ? " The source language is Northern Province Icibemba (Bemba), especially the Kasama and Mungwi variety. Interpret the input as Bemba, not Nyanja or another language. Understand its grammar, word boundaries, idioms, and context before translating into the requested target language. Preserve the speaker's exact meaning, people, actions, tense, time, place, reason, need, and purpose. Do not treat unfamiliar Bemba words as errors, invent meaning, or omit uncertain phrases; use the surrounding context faithfully."
+      : "";
   const prompt = `Translate the complete input from ${srcName} into natural ${tgtName}.${dialectInstruction} Preserve paragraph breaks. Return only the translation, nothing else. Do not include explanations, labels, confidence claims, or source text unless explicitly requested.`;
   const label = `${srcLang}->${tgtLang} (${text.length} chars)`;
   const selected = await readPreferredAIProvider();
