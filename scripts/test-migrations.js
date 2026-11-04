@@ -61,11 +61,11 @@ async function main() {
       "bem",
       "eng"
     );
-    assert.equal(reverseBatch["Bemba knownalpha"]?.translation, "English A",
+    assert.equal(reverseBatch["bemba knownalpha"]?.translation, "English A",
       "Bemba-to-English batch lookup must return the English translation");
-    assert.equal(reverseBatch["Bemba knownbeta"]?.translation, "English B",
+    assert.equal(reverseBatch["bemba knownbeta"]?.translation, "English B",
       "Bemba-to-English batch lookup must return the matching English translation");
-    assert.equal(reverseBatch["missing Bemba word"], undefined,
+    assert.equal(reverseBatch["missing bemba word"], undefined,
       "unknown Bemba words must be left for AI");
 
     const reverseExact = await findVerifiedWordMatch("Bemba knownalpha", "bem", "eng");
