@@ -283,6 +283,29 @@ export async function findVerifiedWordMatch(text, sourceLang, targetLang) {
   };
 }
 
+// Batch lookup used by long-text translation so verified dictionary words
+// can be substituted without issuing one database query per token.
+export async function findVerifiedWordMatches(texts, sourceLang, targetLang) {
+  if (!Array.isArray(texts) || !isValidLang(sourceLang) || !isValidLang(targetLang)) return {};
+  const keys = [...new Set(texts.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean))];
+  if (!keys.length) return {};
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (LOWER(TRIM(en))) * FROM words
+     WHERE status='verified' AND source_lang=$1 AND target_lang=$2
+       AND LOWER(TRIM(en)) = ANY($3::text[])
+     ORDER BY LOWER(TRIM(en)), id ASC`,
+    [sourceLang, targetLang, keys]
+  );
+  return Object.fromEntries(rows.map((word) => [String(word.en).trim().toLowerCase(), {
+    translation: word.bm,
+    source: "dictionary",
+    confidence: word.confidence_score,
+    wordId: word.id,
+    pron: word.pron || undefined,
+    label: `Verified — BembaHub dictionary${word.contrib ? " · " + word.contrib : ""}`,
+  }]));
+}
+
 // Looks up an existing exact translation. Verified entries are returned first,
 // followed by unverified cached entries; rejected entries are never returned.
 // Pass { skipVerified: true } only after findVerifiedWordMatch has already run.
