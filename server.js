@@ -1199,6 +1199,12 @@ app.get("/admin/dictionary", requireAuth, requireRole("admin"), asyncRoute(async
   const { status, q, sourceLang, targetLang, sort } = req.query;
   res.json({ entries: await db.listDictionaryCandidates({ status, q, sourceLang, targetLang, sort }) });
 }));
+app.get("/admin/dictionary/all", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const { page, limit, status, q, sourceLang, targetLang, sort } = req.query;
+  const result = await db.listAllDictionaryEntries({ page, limit, status, q, sourceLang, targetLang, sort });
+  res.json(result);
+}));
+
 app.get("/admin/dictionary/candidates", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const { status, q, sourceLang, targetLang, sort } = req.query;
   res.json({ entries: await db.listDictionaryCandidates({ status: status || "unverified", q, sourceLang, targetLang, sort }) });
