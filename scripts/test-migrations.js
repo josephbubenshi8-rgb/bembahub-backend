@@ -4,6 +4,7 @@ import {
   pool,
   initSchema,
   findVerifiedWordMatch,
+  findVerifiedWordMatches,
   findWordMatch,
   findTranslationMemory,
   recordTranslationMemory,
@@ -33,6 +34,28 @@ async function main() {
   );
   assert.deepEqual(retained.map((row) => row.target_lang), ["bem", "nya"],
     "migration 004 must retain identical text pairs from different language pairs");
+
+  // Batch lookup used by the long-text dictionary-first translator.
+  const batchPhrase = "BembaHub batch dictionary regression";
+  try {
+    await pool.query(
+      "INSERT INTO words (en,bm,source_lang,target_lang,status,contrib) " +
+      "VALUES ($1,'Icibemba A','eng','bem','verified','batch-lookup-test'), " +
+      "($2,'Icibemba B','eng','bem','verified','batch-lookup-test')",
+      ["knownalpha", "knownbeta"]
+    );
+    const batch = await findVerifiedWordMatches(
+      ["knownalpha", "unknownword", "knownbeta", "knownalpha"],
+      "eng",
+      "bem"
+    );
+    assert.equal(batch.knownalpha?.translation, "Icibemba A");
+    assert.equal(batch.knownbeta?.translation, "Icibemba B");
+    assert.equal(batch.unknownword, undefined,
+      "unknown words must be left for AI rather than fabricated dictionary hits");
+  } finally {
+    await pool.query("DELETE FROM words WHERE contrib='batch-lookup-test'");
+  }
 
   // Regression test: exact verified dictionary entries must outrank stale AI
   // translation memory, and a later AI save must not overwrite that trusted value.
