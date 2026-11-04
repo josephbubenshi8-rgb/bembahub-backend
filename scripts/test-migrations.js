@@ -4,6 +4,7 @@ import {
   pool,
   initSchema,
   findVerifiedWordMatch,
+  findVerifiedWordMatches,
   findWordMatch,
   findTranslationMemory,
   recordTranslationMemory,
@@ -33,6 +34,49 @@ async function main() {
   );
   assert.deepEqual(retained.map((row) => row.target_lang), ["bem", "nya"],
     "migration 004 must retain identical text pairs from different language pairs");
+
+  // Batch lookup used by the long-text dictionary-first translator.
+  const batchPhrase = "BembaHub batch dictionary regression";
+  try {
+    await pool.query(
+      "INSERT INTO words (en,bm,source_lang,target_lang,status,contrib) " +
+      "VALUES ($1,'Icibemba A','eng','bem','verified','batch-lookup-test'), " +
+      "($2,'Icibemba B','eng','bem','verified','batch-lookup-test'), " +
+      "('Bemba knownalpha',$3,'bem','eng','verified','batch-lookup-test'), " +
+      "('Bemba knownbeta',$4,'bem','eng','verified','batch-lookup-test')",
+      ["knownalpha", "knownbeta", "English A", "English B"]
+    );
+    const batch = await findVerifiedWordMatches(
+      ["knownalpha", "unknownword", "knownbeta", "knownalpha"],
+      "eng",
+      "bem"
+    );
+    assert.equal(batch.knownalpha?.translation, "Icibemba A");
+    assert.equal(batch.knownbeta?.translation, "Icibemba B");
+    assert.equal(batch.unknownword, undefined,
+      "unknown words must be left for AI rather than fabricated dictionary hits");
+
+    const reverseBatch = await findVerifiedWordMatches(
+      ["Bemba knownalpha", "missing Bemba word", "Bemba knownbeta"],
+      "bem",
+      "eng"
+    );
+    assert.equal(reverseBatch["bemba knownalpha"]?.translation, "English A",
+      "Bemba-to-English batch lookup must return the English translation");
+    assert.equal(reverseBatch["bemba knownbeta"]?.translation, "English B",
+      "Bemba-to-English batch lookup must return the matching English translation");
+    assert.equal(reverseBatch["missing bemba word"], undefined,
+      "unknown Bemba words must be left for AI");
+
+    const reverseExact = await findVerifiedWordMatch("Bemba knownalpha", "bem", "eng");
+    assert.equal(reverseExact?.translation, "English A",
+      "exact verified lookup must work for Bemba-to-English");
+    const reverseCached = await findWordMatch("Bemba knownalpha", "bem", "eng");
+    assert.equal(reverseCached?.translation, "English A",
+      "normal dictionary lookup must work for Bemba-to-English");
+  } finally {
+    await pool.query("DELETE FROM words WHERE contrib='batch-lookup-test'");
+  }
 
   // Regression test: exact verified dictionary entries must outrank stale AI
   // translation memory, and a later AI save must not overwrite that trusted value.
