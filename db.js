@@ -625,14 +625,14 @@ export async function listAllDictionaryEntries({ page = 1, limit = 50, status, q
   const params = [];
   let where = " WHERE 1=1";
   if (status && ["verified", "unverified", "rejected"].includes(status)) {
-    params.push(status); where += ` AND status = ${params.length}`;
+    params.push(status); where += ` AND status = $${params.length}`;
   }
   if (q) {
     params.push(`%${String(q).trim().toLowerCase()}%`);
-    where += ` AND (LOWER(en) LIKE ${params.length} OR LOWER(bm) LIKE ${params.length})`;
+    where += ` AND (LOWER(en) LIKE $${params.length} OR LOWER(bm) LIKE $${params.length})`;
   }
-  if (sourceLang) { params.push(sourceLang); where += ` AND source_lang = ${params.length}`; }
-  if (targetLang) { params.push(targetLang); where += ` AND target_lang = ${params.length}`; }
+  if (sourceLang) { params.push(sourceLang); where += ` AND source_lang = $${params.length}`; }
+  if (targetLang) { params.push(targetLang); where += ` AND target_lang = $${params.length}`; }
   const orderBy = { alphabetical: "LOWER(en) ASC, id ASC", recent: "created_at DESC, id DESC", most_used: "usage_count DESC, id ASC" }[sort] || "id ASC";
   const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM words${where}`, params);
   const total = countResult.rows[0]?.total || 0;
