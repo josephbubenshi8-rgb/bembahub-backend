@@ -638,7 +638,7 @@ export async function listAllDictionaryEntries({ page = 1, limit = 50, status, q
   const total = countResult.rows[0]?.total || 0;
   const offset = (safePage - 1) * safeLimit;
   const pageParams = [...params, safeLimit, offset];
-  const { rows } = await pool.query(`SELECT id,en,bm,source_lang,target_lang,status,cat,pos,pron,ex,definition,usage_count,unique_contributors,confidence_score,high_confidence,source,contrib,created_at,updated_at FROM words${where} ORDER BY ${orderBy} LIMIT ${params.length + 1} OFFSET ${params.length + 2}`, pageParams);
+  const { rows } = await pool.query(`SELECT id,en,bm,source_lang,target_lang,status,cat,pos,pron,ex,definition,usage_count,unique_contributors,confidence_score,high_confidence,source,contrib,created_at,updated_at FROM words${where} ORDER BY ${orderBy} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, pageParams);
   return { entries: rows, total, page: safePage, limit: safeLimit, totalPages: Math.max(1, Math.ceil(total / safeLimit)) };
 }
 
