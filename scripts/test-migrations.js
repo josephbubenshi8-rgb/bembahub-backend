@@ -90,7 +90,7 @@ async function main() {
               WHEN n % 3 = 1 THEN 'verified'
               ELSE 'unverified' END,
          'admin-dictionary-view-test'
-       FROM generate_series(1,12) AS n`,
+       FROM generate_series(1,12) AS series(n)`,
       [viewerPhrase]
     );
 
