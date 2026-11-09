@@ -10,6 +10,18 @@ import {
   findTranslationMemory,
   recordTranslationMemory,
 } from "../db.js";
+import { WORD_TOKEN_PATTERN, tokenizeTranslationChunk, hasUnicodeLetter } from "../translation-text.js";
+
+// Regression tests for Unicode-aware dictionary-first tokenization.
+assert.equal(WORD_TOKEN_PATTERN.test("water"), true, "ordinary English words must be recognized");
+assert.equal(WORD_TOKEN_PATTERN.test("Mwashibukeni"), true, "Icibemba words must be recognized");
+assert.equal(WORD_TOKEN_PATTERN.test("école"), true, "Unicode letters must be recognized");
+assert.equal(WORD_TOKEN_PATTERN.test("water!"), false, "punctuation must not be part of a lexical token");
+assert.deepEqual(tokenizeTranslationChunk("Mwashibukeni, bro!"), ["Mwashibukeni", ",", " ", "bro", "!"],
+  "tokenization must preserve words, punctuation, and spaces in order");
+assert.deepEqual(tokenizeTranslationChunk("  \\n"), ["  \\n"], "whitespace-only chunks must be preserved");
+assert.equal(hasUnicodeLetter("!? "), false, "punctuation and spaces are not lexical text");
+assert.equal(hasUnicodeLetter("á"), true, "Unicode letters must be detected");
 
 async function main() {
   await initSchema();
