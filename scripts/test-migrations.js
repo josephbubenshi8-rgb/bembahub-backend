@@ -19,7 +19,7 @@ assert.equal(WORD_TOKEN_PATTERN.test("école"), true, "Unicode letters must be r
 assert.equal(WORD_TOKEN_PATTERN.test("water!"), false, "punctuation must not be part of a lexical token");
 assert.deepEqual(tokenizeTranslationChunk("Mwashibukeni, bro!"), ["Mwashibukeni", ",", " ", "bro", "!"],
   "tokenization must preserve words, punctuation, and spaces in order");
-assert.deepEqual(tokenizeTranslationChunk("  \\n"), ["  \\n"], "whitespace-only chunks must be preserved");
+assert.deepEqual(tokenizeTranslationChunk("  \n"), ["  \n"], "whitespace-only chunks must be preserved");
 assert.equal(hasUnicodeLetter("!? "), false, "punctuation and spaces are not lexical text");
 assert.equal(hasUnicodeLetter("á"), true, "Unicode letters must be detected");
 
