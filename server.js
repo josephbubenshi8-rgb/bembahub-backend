@@ -9,6 +9,7 @@ import { GoogleGenAI } from "@google/genai";
 import readline from "node:readline";
 
 import * as db from "./db.js";
+import { WORD_TOKEN_PATTERN, tokenizeTranslationChunk, hasUnicodeLetter } from "./translation-text.js";
 import { signToken, requireAuth, requireRole, optionalAuth, publicUser } from "./auth.js";
 import { sendPasswordResetEmail } from "./mailer.js";
 import { LANGUAGES, LANG_CODES, isValidLang } from "./db.js";
@@ -717,66 +718,43 @@ async function translateLongText(text, sourceLang, targetLang) {
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-
-    // Trusted exact dictionary entries outrank any older AI-generated cache.
-    const verifiedChunkHit = await db.findVerifiedWordMatch(chunk, sourceLang, targetLang);
-    if (verifiedChunkHit?.translation) {
-      try {
-        requireUsableTranslation(chunk, verifiedChunkHit.translation, "verified dictionary long-page section");
-        translated.push(verifiedChunkHit.translation);
-        db.recordTranslationMemory({
-          sourceText: chunk,
-          targetText: verifiedChunkHit.translation,
-          sourceLang,
-          targetLang,
-          source: "dictionary",
-          userId: null,
-        }).catch((e) => console.error("[long-translation-dictionary-memory-save]", e));
-        console.log(`[LONG_TRANSLATION_VERIFIED_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
-        continue;
-      } catch (qualityError) {
-        console.warn(`[LONG_TRANSLATION_DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
-      }
-    }
-
-    const memoryHit = await db.findTranslationMemory(chunk, sourceLang, targetLang);
-    if (memoryHit?.translation) {
-      try {
-        requireUsableTranslation(chunk, memoryHit.translation, "cached long-page section");
-        translated.push(memoryHit.translation);
-        console.log(`[LONG_TRANSLATION_MEMORY_HIT] ${i + 1}/${chunks.length}`);
-        continue;
-      } catch (qualityError) {
-        console.warn(`[LONG_TRANSLATION_MEMORY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
-        await db.deleteTranslationMemory(chunk, sourceLang, targetLang);
-      }
-    }
-
-    const chunkHit = await db.findWordMatch(chunk, sourceLang, targetLang, { skipVerified: true });
-    if (chunkHit?.translation) {
-      try {
-        requireUsableTranslation(chunk, chunkHit.translation, "dictionary long-page section");
-        translated.push(chunkHit.translation);
-        console.log(`[LONG_TRANSLATION_DICTIONARY_HIT] ${i + 1}/${chunks.length}`);
-        continue;
-      } catch (qualityError) {
-        console.warn(`[LONG_TRANSLATION_DICTIONARY_QUALITY_REJECTED] ${sourceLang}->${targetLang}; chunk=${i + 1}/${chunks.length}`);
-      }
-    }
-
-    const result = await aiTranslate(chunk, sourceLang, targetLang);
-    if (!result) throw new Error("Empty translation returned for page section " + (i + 1));
-
-    translated.push(result);
-    db.recordTranslationMemory({
-      sourceText: chunk,
-      targetText: result,
+    // Preserve every space and punctuation mark so the assembled translation
+    // keeps the source layout. Only lexical tokens are looked up in the
+    // verified dictionary; all remaining runs are translated by AI.
+    const tokens = tokenizeTranslationChunk(chunk);
+    const dictionary = await db.findVerifiedWordMatches(
+      tokens.filter((token) => WORD_TOKEN_PATTERN.test(token)),
       sourceLang,
-      targetLang,
-      source: "ai_long_section",
-      userId: null,
-    }).catch((e) => console.error("[long-translation-memory-save]", e));
+      targetLang
+    );
 
+    let pending = "";
+    let output = "";
+    const flushPending = async () => {
+      if (!pending) return;
+      if (!hasUnicodeLetter(pending)) {
+        output += pending;
+        pending = "";
+        return;
+      }
+      const aiPart = await aiTranslate(pending, sourceLang, targetLang);
+      if (!aiPart) throw new Error("Empty AI translation returned for an untranslated section.");
+      output += aiPart;
+      pending = "";
+    };
+
+    for (const token of tokens) {
+      const match = WORD_TOKEN_PATTERN.test(token) ? dictionary[token.trim().toLowerCase()] : null;
+      if (match?.translation) {
+        await flushPending();
+        output += match.translation;
+        console.log(`[LONG_TRANSLATION_VERIFIED_WORD_HIT] ${sourceLang}->${targetLang}`);
+      } else {
+        pending += token;
+      }
+    }
+    await flushPending();
+    translated.push(output);
     console.log(`[LONG_TRANSLATION_PROGRESS] ${i + 1}/${chunks.length}`);
   }
 
@@ -841,10 +819,9 @@ app.post("/translate", optionalAuth, rateLimit("translate", 60, 60_000), asyncRo
         // cache/provider chunk slipped through, return a clean error instead
         // of presenting clearly corrupted text as a successful translation.
         requireUsableTranslation(text, pageTranslation, "assembled long-page translation");
-        db.recordTranslationUsage({
-          en: text.trim(), bm: pageTranslation, sourceLang, targetLang,
-          source: "ai_long_page", userId: req.user ? req.user.id : null
-        }).catch((e) => console.error("[long-page-usage-save]", e));
+        // Long-page AI output is a translation result, not a dictionary
+        // headword. Keep it in translation memory only; never create a
+        // misleading whole-paragraph dictionary candidate.
         db.recordTranslationMemory({
           sourceText: text.trim(), targetText: pageTranslation,
           sourceLang, targetLang, source: "ai_long_page",
@@ -1222,6 +1199,12 @@ app.get("/admin/dictionary", requireAuth, requireRole("admin"), asyncRoute(async
   const { status, q, sourceLang, targetLang, sort } = req.query;
   res.json({ entries: await db.listDictionaryCandidates({ status, q, sourceLang, targetLang, sort }) });
 }));
+app.get("/admin/dictionary/all", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
+  const { page, limit, status, q, sourceLang, targetLang, sort } = req.query;
+  const result = await db.listAllDictionaryEntries({ page, limit, status, q, sourceLang, targetLang, sort });
+  res.json(result);
+}));
+
 app.get("/admin/dictionary/candidates", requireAuth, requireRole("admin"), asyncRoute(async (req, res) => {
   const { status, q, sourceLang, targetLang, sort } = req.query;
   res.json({ entries: await db.listDictionaryCandidates({ status: status || "unverified", q, sourceLang, targetLang, sort }) });

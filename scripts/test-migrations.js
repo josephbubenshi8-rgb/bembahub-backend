@@ -4,10 +4,24 @@ import {
   pool,
   initSchema,
   findVerifiedWordMatch,
+  findVerifiedWordMatches,
   findWordMatch,
+  listAllDictionaryEntries,
   findTranslationMemory,
   recordTranslationMemory,
 } from "../db.js";
+import { WORD_TOKEN_PATTERN, tokenizeTranslationChunk, hasUnicodeLetter } from "../translation-text.js";
+
+// Regression tests for Unicode-aware dictionary-first tokenization.
+assert.equal(WORD_TOKEN_PATTERN.test("water"), true, "ordinary English words must be recognized");
+assert.equal(WORD_TOKEN_PATTERN.test("Mwashibukeni"), true, "Icibemba words must be recognized");
+assert.equal(WORD_TOKEN_PATTERN.test("école"), true, "Unicode letters must be recognized");
+assert.equal(WORD_TOKEN_PATTERN.test("water!"), false, "punctuation must not be part of a lexical token");
+assert.deepEqual(tokenizeTranslationChunk("Mwashibukeni, bro!"), ["Mwashibukeni", ",", " ", "bro", "!"],
+  "tokenization must preserve words, punctuation, and spaces in order");
+assert.deepEqual(tokenizeTranslationChunk("  \n"), ["  \n"], "whitespace-only chunks must be preserved");
+assert.equal(hasUnicodeLetter("!? "), false, "punctuation and spaces are not lexical text");
+assert.equal(hasUnicodeLetter("á"), true, "Unicode letters must be detected");
 
 async function main() {
   await initSchema();
@@ -33,6 +47,93 @@ async function main() {
   );
   assert.deepEqual(retained.map((row) => row.target_lang), ["bem", "nya"],
     "migration 004 must retain identical text pairs from different language pairs");
+
+  // Batch lookup used by the long-text dictionary-first translator.
+  const batchPhrase = "BembaHub batch dictionary regression";
+  try {
+    await pool.query(
+      "INSERT INTO words (en,bm,source_lang,target_lang,status,contrib) " +
+      "VALUES ($1,'Icibemba A','eng','bem','verified','batch-lookup-test'), " +
+      "($2,'Icibemba B','eng','bem','verified','batch-lookup-test'), " +
+      "('Bemba knownalpha',$3,'bem','eng','verified','batch-lookup-test'), " +
+      "('Bemba knownbeta',$4,'bem','eng','verified','batch-lookup-test')",
+      ["knownalpha", "knownbeta", "English A", "English B"]
+    );
+    const batch = await findVerifiedWordMatches(
+      ["knownalpha", "unknownword", "knownbeta", "knownalpha"],
+      "eng",
+      "bem"
+    );
+    assert.equal(batch.knownalpha?.translation, "Icibemba A");
+    assert.equal(batch.knownbeta?.translation, "Icibemba B");
+    assert.equal(batch.unknownword, undefined,
+      "unknown words must be left for AI rather than fabricated dictionary hits");
+
+    const reverseBatch = await findVerifiedWordMatches(
+      ["Bemba knownalpha", "missing Bemba word", "Bemba knownbeta"],
+      "bem",
+      "eng"
+    );
+    assert.equal(reverseBatch["bemba knownalpha"]?.translation, "English A",
+      "Bemba-to-English batch lookup must return the English translation");
+    assert.equal(reverseBatch["bemba knownbeta"]?.translation, "English B",
+      "Bemba-to-English batch lookup must return the matching English translation");
+    assert.equal(reverseBatch["missing bemba word"], undefined,
+      "unknown Bemba words must be left for AI");
+
+    const reverseExact = await findVerifiedWordMatch("Bemba knownalpha", "bem", "eng");
+    assert.equal(reverseExact?.translation, "English A",
+      "exact verified lookup must work for Bemba-to-English");
+    const reverseCached = await findWordMatch("Bemba knownalpha", "bem", "eng");
+    assert.equal(reverseCached?.translation, "English A",
+      "normal dictionary lookup must work for Bemba-to-English");
+  } finally {
+    await pool.query("DELETE FROM words WHERE contrib='batch-lookup-test'");
+  }
+
+  // Regression test for the complete admin dictionary browser: every status
+  // is included by default, search and filters work, and pages stay bounded.
+  const viewerPhrase = "BembaHub admin viewer pagination regression";
+  try {
+    await pool.query(
+      `INSERT INTO words (en,bm,source_lang,target_lang,status,contrib)
+       SELECT $1 || ' ' || n, 'Icibemba viewer ' || n, 'eng', 'bem',
+         CASE WHEN n % 3 = 0 THEN 'rejected'
+              WHEN n % 3 = 1 THEN 'verified'
+              ELSE 'unverified' END,
+         'admin-dictionary-view-test'
+       FROM generate_series(1,12) AS series(n)`,
+      [viewerPhrase]
+    );
+
+    const firstPage = await listAllDictionaryEntries({
+      page: 1, limit: 10, q: viewerPhrase, sourceLang: "eng",
+      targetLang: "bem", sort: "alphabetical",
+    });
+    assert.equal(firstPage.total, 12, "the admin view must count all matching rows, not only verified entries");
+    assert.equal(firstPage.entries.length, 10, "the admin view must return only the requested page size");
+    assert.equal(firstPage.page, 1);
+    assert.equal(firstPage.totalPages, 2, "twelve matching entries at ten per page must produce two pages");
+    assert.deepEqual(
+      [...new Set(firstPage.entries.map((row) => row.status))].sort(),
+      ["rejected", "unverified", "verified"],
+      "the unfiltered admin view must include every dictionary status"
+    );
+
+    const secondPage = await listAllDictionaryEntries({
+      page: 2, limit: 10, q: viewerPhrase, sourceLang: "eng", targetLang: "bem",
+      sort: "alphabetical",
+    });
+    assert.equal(secondPage.entries.length, 2, "the final page must contain the remaining entries");
+
+    const verifiedOnly = await listAllDictionaryEntries({
+      page: 1, limit: 10, q: viewerPhrase, status: "verified",
+      sourceLang: "eng", targetLang: "bem",
+    });
+    assert.equal(verifiedOnly.total, 4, "status filters must apply to the complete dictionary search");
+  } finally {
+    await pool.query("DELETE FROM words WHERE contrib='admin-dictionary-view-test'");
+  }
 
   // Regression test: exact verified dictionary entries must outrank stale AI
   // translation memory, and a later AI save must not overwrite that trusted value.
