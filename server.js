@@ -721,7 +721,7 @@ async function translateLongText(text, sourceLang, targetLang) {
     // Preserve every space and punctuation mark so the assembled translation
     // keeps the source layout. Only lexical tokens are looked up in the
     // verified dictionary; all remaining runs are translated by AI.
-        const tokens = tokenizeTranslationChunk(chunk);
+    const tokens = tokenizeTranslationChunk(chunk);
     const dictionary = await db.findVerifiedWordMatches(
       tokens.filter((token) => WORD_TOKEN_PATTERN.test(token)),
       sourceLang,
@@ -732,7 +732,7 @@ async function translateLongText(text, sourceLang, targetLang) {
     let output = "";
     const flushPending = async () => {
       if (!pending) return;
-            if (!hasUnicodeLetter(pending)) {
+      if (!hasUnicodeLetter(pending)) {
         output += pending;
         pending = "";
         return;
@@ -748,7 +748,7 @@ async function translateLongText(text, sourceLang, targetLang) {
       if (match?.translation) {
         await flushPending();
         output += match.translation;
-                console.log(`[LONG_TRANSLATION_VERIFIED_WORD_HIT] ${sourceLang}->${targetLang}`);
+        console.log(`[LONG_TRANSLATION_VERIFIED_WORD_HIT] ${sourceLang}->${targetLang}`);
       } else {
         pending += token;
       }
