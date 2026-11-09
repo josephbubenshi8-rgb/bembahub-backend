@@ -9,6 +9,7 @@ import { GoogleGenAI } from "@google/genai";
 import readline from "node:readline";
 
 import * as db from "./db.js";
+import { WORD_TOKEN_PATTERN, tokenizeTranslationChunk, hasUnicodeLetter } from "./translation-text.js";
 import { signToken, requireAuth, requireRole, optionalAuth, publicUser } from "./auth.js";
 import { sendPasswordResetEmail } from "./mailer.js";
 import { LANGUAGES, LANG_CODES, isValidLang } from "./db.js";
@@ -714,16 +715,15 @@ async function translateLongText(text, sourceLang, targetLang) {
 
   console.log(`[LONG_TRANSLATION_START] ${sourceLang}->${targetLang} chunks=${chunks.length} chars=${text.length}`);
   const translated = [];
-  const wordPattern = /^[\\p{L}\\p{M}]+(?:['’][\\p{L}\\p{M}]+)*$/u;
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     // Preserve every space and punctuation mark so the assembled translation
     // keeps the source layout. Only lexical tokens are looked up in the
     // verified dictionary; all remaining runs are translated by AI.
-    const tokens = chunk.match(/\\s+|[\\p{L}\\p{M}]+(?:['’][\\p{L}\\p{M}]+)*|[^\\s\\p{L}\\p{M}]+/gu) || [chunk];
+        const tokens = tokenizeTranslationChunk(chunk);
     const dictionary = await db.findVerifiedWordMatches(
-      tokens.filter((token) => wordPattern.test(token)),
+      tokens.filter((token) => WORD_TOKEN_PATTERN.test(token)),
       sourceLang,
       targetLang
     );
@@ -732,7 +732,7 @@ async function translateLongText(text, sourceLang, targetLang) {
     let output = "";
     const flushPending = async () => {
       if (!pending) return;
-      if (!/[\\p{L}\\p{M}]/u.test(pending)) {
+            if (!hasUnicodeLetter(pending)) {
         output += pending;
         pending = "";
         return;
@@ -744,11 +744,11 @@ async function translateLongText(text, sourceLang, targetLang) {
     };
 
     for (const token of tokens) {
-      const match = wordPattern.test(token) ? dictionary[token.trim().toLowerCase()] : null;
+      const match = WORD_TOKEN_PATTERN.test(token) ? dictionary[token.trim().toLowerCase()] : null;
       if (match?.translation) {
         await flushPending();
         output += match.translation;
-        console.log(`[LONG_TRANSLATION_VERIFIED_WORD_HIT] ${sourceLang}->${targetLang} word=${token}`);
+                console.log(`[LONG_TRANSLATION_VERIFIED_WORD_HIT] ${sourceLang}->${targetLang}`);
       } else {
         pending += token;
       }
