@@ -1,0 +1,80 @@
+{
+  "title": "BembaHub Northern Province Icibemba → English QA Starter Pack",
+  "version": 1,
+  "purpose": "Manual QA fixture only. This file is not imported into production or the translation database.",
+  "source": {
+    "languageCode": "bem",
+    "label": "Standard written Icibemba (Northern Province)",
+    "regionalFocus": "Kasama and nearby Mungwi",
+    "note": "The Bemba source phrases are copied from the companion English → Icibemba QA starter pack. Their English glosses are candidate references only. A fluent Northern Province speaker must approve the Bemba wording and glosses before this pack is used as a gold-standard quality benchmark."
+  },
+  "target": {
+    "languageCode": "eng",
+    "label": "English"
+  },
+  "cases": [
+    {
+      "id": "reverse-greet-001",
+      "category": "greetings",
+      "sourceLang": "bem",
+      "targetLang": "eng",
+      "sourceText": "Mwashibukeni.",
+      "candidateReferenceTranslation": "Good morning.",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Reverse-direction companion to greet-001 in northern-icibemba-translation-cases.json."
+    },
+    {
+      "id": "reverse-greet-002",
+      "category": "greetings",
+      "sourceLang": "bem",
+      "targetLang": "eng",
+      "sourceText": "Muli shani?",
+      "candidateReferenceTranslation": "How are you?",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Confirm the intended register and context with a Northern Province speaker."
+    },
+    {
+      "id": "reverse-greet-003",
+      "category": "greetings",
+      "sourceLang": "bem",
+      "targetLang": "eng",
+      "sourceText": "Mwaiseni.",
+      "candidateReferenceTranslation": "Welcome.",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Confirm natural English rendering in context with a Northern Province speaker."
+    },
+    {
+      "id": "reverse-greet-004",
+      "category": "gratitude",
+      "sourceLang": "bem",
+      "targetLang": "eng",
+      "sourceText": "Natotela sana.",
+      "candidateReferenceTranslation": "Thank you very much.",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Confirm spelling and naturalness with a Northern Province speaker."
+    },
+    {
+      "id": "reverse-greet-005",
+      "category": "daily-conversation",
+      "sourceLang": "bem",
+      "targetLang": "eng",
+      "sourceText": "Ndifye bwino. Ngaimwe muli shani?",
+      "candidateReferenceTranslation": "I am fine. And you?",
+      "expectedTranslation": null,
+      "referenceStatus": "candidate-needs-native-review",
+      "referenceNote": "Check pronouns, register, and punctuation with a Northern Province speaker."
+    }
+  ],
+  "runInstructions": [
+    "Run each case through the deployed BembaHub interface using Bemba → English after confirming the backend deployment is Live.",
+    "Record total response time, whether the request succeeded, selected provider if available, and the returned English text.",
+    "Do not treat candidateReferenceTranslation as a certified answer; expectedTranslation remains null until a fluent Northern Province speaker approves it.",
+    "Do not paste API keys, access tokens, passwords, or private client text into this fixture.",
+    "Do not write candidate answers into production translation memory until a fluent Northern Province speaker has reviewed and approved them.",
+    "Add a naturally written multi-sentence Northern Province Icibemba passage only after a fluent speaker supplies and approves it."
+  ]
+}
