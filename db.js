@@ -602,22 +602,23 @@ export async function listAllDictionaryEntries({ page = 1, limit = 50, status, q
   const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 50));
   const params = [];
   let where = " WHERE 1=1";
+
   if (status && ["verified", "unverified", "rejected"].includes(status)) {
     params.push(status);
-    where += ` AND status = $\u007bparams.length\u007d`;
+    where += " AND status = $" + params.length;
   }
   const search = String(q || "").trim().toLowerCase();
   if (search) {
-    params.push(`%\u007bsearch\u007d%`);
-    where += ` AND (LOWER(en) LIKE $\u007bparams.length\u007d OR LOWER(bm) LIKE $\u007bparams.length\u007d)`;
+    params.push("%" + search + "%");
+    where += " AND (LOWER(en) LIKE $" + params.length + " OR LOWER(bm) LIKE $" + params.length + ")";
   }
   if (sourceLang) {
     params.push(sourceLang);
-    where += ` AND source_lang = $\u007bparams.length\u007d`;
+    where += " AND source_lang = $" + params.length;
   }
   if (targetLang) {
     params.push(targetLang);
-    where += ` AND target_lang = $\u007bparams.length\u007d`;
+    where += " AND target_lang = $" + params.length;
   }
 
   // Only fixed, known SQL fragments are accepted for sorting.
@@ -627,16 +628,14 @@ export async function listAllDictionaryEntries({ page = 1, limit = 50, status, q
     most_used: "usage_count DESC, id ASC",
   }[sort] || "id ASC";
 
-  const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM words\u007bwhere\u007d`, params);
+  const countResult = await pool.query("SELECT COUNT(*)::int AS total FROM words" + where, params);
   const total = countResult.rows[0]?.total || 0;
   const totalPages = Math.max(1, Math.ceil(total / safeLimit));
   const safePage = Math.min(requestedPage, totalPages);
   const pageParams = [...params, safeLimit, (safePage - 1) * safeLimit];
-  const { rows } = await pool.query(
-    `SELECT id,en,bm,source_lang,target_lang,status,cat,pos,pron,ex,definition,usage_count,unique_contributors,confidence_score,high_confidence,source,contrib,created_at,updated_at
-     FROM words\u007bwhere\u007d ORDER BY \u007borderBy\u007d LIMIT $\u007bparams.length + 1\u007d OFFSET $\u007bparams.length + 2\u007d`,
-    pageParams
-  );
+  const sql = "SELECT id,en,bm,source_lang,target_lang,status,cat,pos,pron,ex,definition,usage_count,unique_contributors,confidence_score,high_confidence,source,contrib,created_at,updated_at " +
+    "FROM words" + where + " ORDER BY " + orderBy + " LIMIT $" + (params.length + 1) + " OFFSET $" + (params.length + 2);
+  const { rows } = await pool.query(sql, pageParams);
   return { entries: rows, total, page: safePage, limit: safeLimit, totalPages };
 }
 
