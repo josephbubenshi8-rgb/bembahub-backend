@@ -5,6 +5,7 @@ import {
   initSchema,
   findVerifiedWordMatch,
   findWordMatch,
+  listAllDictionaryEntries,
   findTranslationMemory,
   recordTranslationMemory,
 } from "../db.js";
@@ -33,6 +34,54 @@ async function main() {
   );
   assert.deepEqual(retained.map((row) => row.target_lang), ["bem", "nya"],
     "migration 004 must retain identical text pairs from different language pairs");
+
+  // Regression test for the read-only, paginated complete dictionary query.
+  const viewerPhrase = "BembaHub admin viewer pagination regression";
+  try {
+    await pool.query(
+      `INSERT INTO words (en,bm,source_lang,target_lang,status,contrib)
+       SELECT $1 || ' ' || n, 'Icibemba viewer ' || n, 'eng', 'bem',
+         CASE WHEN n % 3 = 0 THEN 'rejected'
+              WHEN n % 3 = 1 THEN 'verified'
+              ELSE 'unverified' END,
+         'admin-dictionary-view-test'
+       FROM generate_series(1,12) AS series(n)`,
+      [viewerPhrase]
+    );
+
+    const firstPage = await listAllDictionaryEntries({
+      page: 1, limit: 10, q: viewerPhrase, sourceLang: "eng",
+      targetLang: "bem", sort: "alphabetical",
+    });
+    assert.equal(firstPage.total, 12, "the admin view must count all matching rows, not only verified entries");
+    assert.equal(firstPage.entries.length, 10, "the admin view must return only the requested page size");
+    assert.equal(firstPage.page, 1);
+    assert.equal(firstPage.totalPages, 2, "twelve matching entries at ten per page must produce two pages");
+    assert.deepEqual(
+      [...new Set(firstPage.entries.map((row) => row.status))].sort(),
+      ["rejected", "unverified", "verified"],
+      "the unfiltered admin view must include every dictionary status"
+    );
+
+    const secondPage = await listAllDictionaryEntries({
+      page: 2, limit: 10, q: viewerPhrase, sourceLang: "eng", targetLang: "bem",
+      sort: "alphabetical",
+    });
+    assert.equal(secondPage.entries.length, 2, "the final page must contain the remaining entries");
+
+    const verifiedOnly = await listAllDictionaryEntries({
+      page: 1, limit: 10, q: viewerPhrase, status: "verified",
+      sourceLang: "eng", targetLang: "bem",
+    });
+    assert.equal(verifiedOnly.total, 4, "status filters must apply to the complete dictionary search");
+
+    const translationSearch = await listAllDictionaryEntries({
+      page: 1, limit: 10, q: "Icibemba viewer 5", sourceLang: "eng", targetLang: "bem",
+    });
+    assert.equal(translationSearch.total, 1, "search must match the translated text as well as the source text");
+  } finally {
+    await pool.query("DELETE FROM words WHERE contrib='admin-dictionary-view-test'");
+  }
 
   // Regression test: exact verified dictionary entries must outrank stale AI
   // translation memory, and a later AI save must not overwrite that trusted value.
