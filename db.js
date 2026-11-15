@@ -595,6 +595,51 @@ export async function listDictionaryCandidates({ status, q, sourceLang, targetLa
   const { rows } = await pool.query(sql, params);
   return rows;
 }
+// Read-only, paginated admin view of every dictionary row, including all statuses.
+// The database stores source text in en and translated text in bm for every language pair.
+export async function listAllDictionaryEntries({ page = 1, limit = 50, status, q, sourceLang, targetLang, sort } = {}) {
+  const requestedPage = Math.max(1, Number.parseInt(page, 10) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 50));
+  const params = [];
+  let where = " WHERE 1=1";
+  if (status && ["verified", "unverified", "rejected"].includes(status)) {
+    params.push(status);
+    where += ` AND status = $\u007bparams.length\u007d`;
+  }
+  const search = String(q || "").trim().toLowerCase();
+  if (search) {
+    params.push(`%\u007bsearch\u007d%`);
+    where += ` AND (LOWER(en) LIKE $\u007bparams.length\u007d OR LOWER(bm) LIKE $\u007bparams.length\u007d)`;
+  }
+  if (sourceLang) {
+    params.push(sourceLang);
+    where += ` AND source_lang = $\u007bparams.length\u007d`;
+  }
+  if (targetLang) {
+    params.push(targetLang);
+    where += ` AND target_lang = $\u007bparams.length\u007d`;
+  }
+
+  // Only fixed, known SQL fragments are accepted for sorting.
+  const orderBy = {
+    alphabetical: "LOWER(en) ASC, id ASC",
+    recent: "created_at DESC, id DESC",
+    most_used: "usage_count DESC, id ASC",
+  }[sort] || "id ASC";
+
+  const countResult = await pool.query(`SELECT COUNT(*)::int AS total FROM words\u007bwhere\u007d`, params);
+  const total = countResult.rows[0]?.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const safePage = Math.min(requestedPage, totalPages);
+  const pageParams = [...params, safeLimit, (safePage - 1) * safeLimit];
+  const { rows } = await pool.query(
+    `SELECT id,en,bm,source_lang,target_lang,status,cat,pos,pron,ex,definition,usage_count,unique_contributors,confidence_score,high_confidence,source,contrib,created_at,updated_at
+     FROM words\u007bwhere\u007d ORDER BY \u007borderBy\u007d LIMIT $\u007bparams.length + 1\u007d OFFSET $\u007bparams.length + 2\u007d`,
+    pageParams
+  );
+  return { entries: rows, total, page: safePage, limit: safeLimit, totalPages };
+}
+
 export async function setWordStatus(id, status) {
   const { rows } = await pool.query("UPDATE words SET status=$1, updated_at=now() WHERE id=$2 RETURNING *", [status, id]);
   if (!rows[0]) return null;
